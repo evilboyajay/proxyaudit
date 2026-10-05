@@ -1,0 +1,58 @@
+{
+  "name": "burp-alt",
+  "productName": "ProxyAudit",
+  "version": "0.1.0",
+  "description": "An open-source web security testing proxy with a Claude-powered endpoint & JS auditor.",
+  "author": "user@example.com",
+  "license": "MIT",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist": "electron-builder --mac",
+    "pack": "electron-builder --dir",
+    "qa": "node test/renderer-qa.js"
+  },
+  "build": {
+    "appId": "io.github.evilboyajay.proxyaudit",
+    "productName": "ProxyAudit",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.icns",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    }
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.289",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "chrome-remote-interface": "^0.34.0",
+    "http-mitm-proxy": "^1.1.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^26.0.0",
+    "jsdom": "^29.1.1"
+  }
+}

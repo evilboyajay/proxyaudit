@@ -1,0 +1,728 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';"
+    />
+    <title>ProxyAudit</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="titlebar">
+      <div class="tb-left">
+        <span class="logo">◆</span>
+        <span class="appname">ProxyAudit</span>
+      </div>
+      <div class="tb-center">
+        <span id="statusPill" class="pill off">Proxy stopped</span>
+        <span id="portLabel" class="muted"></span>
+      </div>
+      <div class="tb-right">
+        <label class="switch" title="Hold requests for inspection">
+          <input type="checkbox" id="interceptToggle" />
+          <span class="slider"></span>
+          <span class="switch-label">Intercept</span>
+        </label>
+        <button id="openBrowserBtn" class="btn">🌐 Open browser</button>
+        <button id="toggleProxyBtn" class="btn primary">Start proxy</button>
+      </div>
+    </div>
+
+    <div id="layout">
+      <nav id="tabbar">
+        <button class="nav" data-group="target">Target</button>
+        <button class="nav active" data-group="proxy">Proxy <span class="badge" id="flowCount">0</span></button>
+        <button class="nav" data-group="repeater">Repeater</button>
+        <button class="nav" data-group="intruder">Intruder</button>
+        <button class="nav" data-group="sequencer">Sequencer</button>
+        <button class="nav" data-group="decoder">Decoder</button>
+        <button class="nav" data-group="comparer">Comparer</button>
+        <button class="nav" data-group="discovery">Discovery <span class="badge" id="discCount">0</span></button>
+        <button class="nav" data-group="collaborator">Collaborator <span class="badge" id="collabCount">0</span></button>
+        <button class="nav" data-group="build">Build</button>
+        <button class="nav" data-group="settings">Settings</button>
+        <div class="nav-spacer"></div>
+        <div id="authStatus" class="auth-status unknown" title="Claude auth">
+          <span class="dot"></span><span id="authText">Claude: unknown</span>
+        </div>
+      </nav>
+
+      <div id="subtabbar">
+        <div class="subnav-group active" data-group="proxy">
+          <button class="subnav" data-view="intercept">Intercept <span class="badge warn hidden" id="interceptCount">0</span></button>
+          <button class="subnav active" data-view="proxy">HTTP history</button>
+          <button class="subnav" data-view="websockets">WebSockets history <span class="badge" id="wsCount">0</span></button>
+          <button class="subnav" data-view="matchreplace">Match &amp; replace <span class="badge" id="mrCount">0</span></button>
+        </div>
+        <div class="subnav-group hidden" data-group="target">
+          <button class="subnav active" data-view="sitemap">Site map</button>
+          <button class="subnav" data-view="scope">Scope <span class="badge" id="scopeCount">0</span></button>
+        </div>
+      </div>
+
+      <main id="main">
+        <!-- PROXY -->
+        <section class="view active" id="view-proxy">
+          <div class="toolbar">
+            <input
+              id="flowFilter"
+              class="input grow"
+              placeholder="Filter by host, path, method, status…"
+            />
+            <label class="switch" title="Show only in-scope requests">
+              <input type="checkbox" id="scopeOnly" />
+              <span class="slider"></span>
+              <span class="switch-label">In-scope</span>
+            </label>
+            <button class="btn sm" id="flowFilterBtn" title="HTTP history filter">
+              Filter <span class="hf-dot hidden" id="flowFilterBadge"></span>
+            </button>
+            <button class="btn sm" id="exportJsonBtn">Export JSON</button>
+            <button class="btn sm" id="exportHarBtn">Export HAR</button>
+            <button class="btn sm" id="importJsonBtn">Import</button>
+            <button class="btn" id="clearFlowsBtn">Clear</button>
+          </div>
+          <div class="split">
+            <div class="table-wrap">
+              <table id="flowTable">
+                <thead>
+                  <tr>
+                    <th style="width:62px">#</th>
+                    <th style="width:70px">Method</th>
+                    <th>Host</th>
+                    <th>Path</th>
+                    <th style="width:60px">Status</th>
+                    <th style="width:120px">Type</th>
+                    <th style="width:80px">Length</th>
+                  </tr>
+                </thead>
+                <tbody id="flowBody"></tbody>
+              </table>
+            </div>
+            <div class="detail" id="flowDetail">
+              <div class="detail-toolbar">
+                <div class="seg">
+                  <button class="seg-btn active" data-pane="req">Request</button>
+                  <button class="seg-btn" data-pane="res">Response</button>
+                </div>
+                <div class="detail-actions">
+                  <button class="btn sm" id="toRepeaterBtn" disabled>→ Repeater</button>
+                  <button class="btn sm" id="toIntruderBtn" disabled>→ Intruder</button>
+                  <button class="btn sm" id="toComparerBtn" disabled>→ Comparer</button>
+                </div>
+              </div>
+              <div id="reqView" class="mv-wrap"></div>
+              <div id="resView" class="mv-wrap hidden"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- TARGET / SITEMAP -->
+        <section class="view" id="view-sitemap">
+          <div class="toolbar">
+            <span class="muted">Site map — hosts and paths from captured traffic</span>
+          </div>
+          <div class="split">
+            <div class="tree-wrap" id="smTree"></div>
+            <div class="sm-right">
+              <div class="table-wrap sm-contents-wrap">
+                <table id="smContentsTable">
+                  <thead>
+                    <tr>
+                      <th style="width:70px">Method</th>
+                      <th>Path</th>
+                      <th style="width:60px">Status</th>
+                      <th style="width:80px">Length</th>
+                      <th style="width:150px">MIME</th>
+                    </tr>
+                  </thead>
+                  <tbody id="smContents"></tbody>
+                </table>
+              </div>
+              <div class="detail sm-msg">
+                <div class="detail-toolbar">
+                  <div class="seg">
+                    <button class="sm-seg-btn active" data-pane="req">Request</button>
+                    <button class="sm-seg-btn" data-pane="res">Response</button>
+                  </div>
+                </div>
+                <div class="sm-view-host">
+                  <div id="smReqView" class="mv-wrap"></div>
+                  <div id="smResView" class="mv-wrap hidden"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- INTERCEPT -->
+        <section class="view" id="view-intercept">
+          <div class="toolbar">
+            <button class="btn" id="interceptToggleBtn">Intercept is off</button>
+            <button class="btn primary" id="forwardBtn" disabled>→ Forward</button>
+            <button class="btn" id="dropBtn" disabled>Drop</button>
+            <div class="spacer"></div>
+            <span id="interceptState" class="muted">Intercept is off.</span>
+          </div>
+          <textarea
+            id="interceptEditor"
+            class="code-area"
+            spellcheck="false"
+            placeholder="Held requests appear here. Turn on Intercept and generate traffic."
+          ></textarea>
+        </section>
+
+        <!-- REPEATER -->
+        <section class="view" id="view-repeater">
+          <div class="toolbar">
+            <div id="repeaterTabs" class="tabs"></div>
+            <button class="btn sm" id="newRepeaterTab">+ New</button>
+          </div>
+          <div class="toolbar">
+            <select id="repMethod" class="input" style="width:100px">
+              <option>GET</option><option>POST</option><option>PUT</option>
+              <option>PATCH</option><option>DELETE</option><option>HEAD</option>
+              <option>OPTIONS</option>
+            </select>
+            <input id="repUrl" class="input grow" placeholder="https://target/path" />
+            <button class="btn primary" id="repSendBtn">Send</button>
+          </div>
+          <div class="split">
+            <div class="col">
+              <label class="field-label">Request headers &amp; body</label>
+              <textarea id="repRequest" class="code-area" spellcheck="false"
+                placeholder="Header-Name: value&#10;Header-Name: value&#10;&#10;request body"></textarea>
+            </div>
+            <div class="col">
+              <label class="field-label">
+                Response <span id="repMeta" class="muted"></span>
+              </label>
+              <pre class="raw" id="repResponse">No response yet.</pre>
+            </div>
+          </div>
+        </section>
+
+        <!-- INTRUDER -->
+        <section class="view" id="view-intruder">
+          <div class="toolbar">
+            <input id="intrTarget" class="input grow" placeholder="https://target  (origin: scheme://host — path comes from the template)" />
+            <select id="intrAttackType" class="input" style="width:150px">
+              <option value="sniper">Sniper</option>
+              <option value="batteringram">Battering ram</option>
+              <option value="pitchfork">Pitchfork</option>
+              <option value="clusterbomb">Cluster bomb</option>
+            </select>
+            <span id="intrCount" class="muted"></span>
+            <div class="spacer"></div>
+            <button class="btn primary" id="intrStartBtn">Start attack</button>
+            <button class="btn" id="intrStopBtn" disabled>Stop</button>
+          </div>
+          <div class="split">
+            <div class="col">
+              <label class="field-label">
+                Request template
+                <button class="btn sm" id="intrMarkBtn" title="Wrap the selected text in § markers">Add § position</button>
+              </label>
+              <textarea id="intrTemplate" class="code-area" spellcheck="false"
+                placeholder="GET /search?q=§term§ HTTP/1.1&#10;Host: target&#10;&#10;"></textarea>
+              <label class="field-label">
+                Payloads <span class="muted" id="intrPayloadHint">— choose a payload type per set; add processing rules and URL encoding.</span>
+              </label>
+              <div id="intrPayloadPanel" class="intr-payload-panel">
+                <div class="intr-row" id="intrSetSelectRow" style="display:none">
+                  <span class="field-label">Payload set</span>
+                  <select id="intrSetSelect" class="input" style="flex:1"></select>
+                </div>
+                <div class="intr-row">
+                  <span class="field-label">Payload type</span>
+                  <select id="intrPayloadType" class="input" style="flex:1">
+                    <option value="simple-list">Simple list</option>
+                    <option value="numbers">Numbers</option>
+                    <option value="dates">Dates</option>
+                    <option value="brute-forcer">Brute forcer</option>
+                    <option value="null-payloads">Null payloads</option>
+                    <option value="case-modification">Case modification</option>
+                  </select>
+                </div>
+                <div id="intrParams" class="intr-params"></div>
+                <div class="intr-section">
+                  <div class="intr-row">
+                    <span class="field-label">Payload processing</span>
+                    <div class="spacer"></div>
+                    <select id="intrRuleType" class="input" style="width:150px">
+                      <option value="add-prefix">Add prefix</option>
+                      <option value="add-suffix">Add suffix</option>
+                      <option value="match-replace">Match/replace</option>
+                      <option value="substring">Substring</option>
+                      <option value="modify-case">Modify case</option>
+                      <option value="encode">Encode</option>
+                      <option value="decode">Decode</option>
+                      <option value="hash">Hash</option>
+                      <option value="skip-if-match">Skip if matches</option>
+                    </select>
+                    <button class="btn sm" id="intrRuleAdd">Add</button>
+                  </div>
+                  <div id="intrRules" class="intr-rules"></div>
+                </div>
+                <div class="intr-section">
+                  <label class="field-label">Payload encoding <span class="muted">— URL-encode these characters</span></label>
+                  <input id="intrEncChars" class="input" placeholder="e.g.  =&amp;?+/;:@&amp;#  (and space)" />
+                </div>
+              </div>
+            </div>
+            <div class="col">
+              <div class="table-wrap">
+                <table id="intrTable">
+                  <thead>
+                    <tr>
+                      <th style="width:52px">#</th>
+                      <th>Payload</th>
+                      <th style="width:60px">Status</th>
+                      <th style="width:80px">Length</th>
+                      <th style="width:70px">Time</th>
+                    </tr>
+                  </thead>
+                  <tbody id="intrBody"></tbody>
+                </table>
+              </div>
+              <div class="detail" style="flex:0 0 auto; max-height:45%;">
+                <div class="detail-toolbar">
+                  <div class="seg">
+                    <button class="seg-btn active" data-ipane="req">Request</button>
+                    <button class="seg-btn" data-ipane="res">Response</button>
+                  </div>
+                  <span id="intrDetailMeta" class="muted"></span>
+                </div>
+                <pre class="raw" id="intrReqRaw">Select a result row to inspect.</pre>
+                <pre class="raw hidden" id="intrResRaw"></pre>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SEQUENCER -->
+        <section class="view" id="view-sequencer">
+          <div class="toolbar">
+            <button class="btn primary" id="seq-start">Start</button>
+            <button class="btn" id="seq-stop" disabled>Stop</button>
+            <span class="muted" id="seq-progress-label">idle</span>
+          </div>
+          <div class="split">
+            <div class="col">
+              <label class="field-label">Raw request (first line: METHOD URL, then headers, blank line, body)</label>
+              <textarea id="seq-request" class="code-area" spellcheck="false"
+                placeholder="GET https://example.com/login&#10;Cookie: foo=bar&#10;&#10;"></textarea>
+              <label class="field-label">Token source</label>
+              <div class="toolbar" style="padding-left:0;padding-right:0;border:none;background:none;">
+                <select id="seq-src-type" class="input">
+                  <option value="cookie">Cookie</option>
+                  <option value="header">Header</option>
+                  <option value="regex">Regex</option>
+                  <option value="json">JSON path</option>
+                </select>
+                <input id="seq-src-name" class="input grow" placeholder="name / json path (e.g. SESSIONID, data.token)" />
+                <input id="seq-src-group" class="input" style="width:70px" placeholder="group" value="1" hidden />
+              </div>
+              <div class="toolbar" style="padding-left:0;padding-right:0;border:none;background:none;">
+                <span class="field-label">Count</span>
+                <input id="seq-count" class="input" style="width:90px" type="number" value="200" min="1" />
+                <span class="field-label">Concurrency</span>
+                <input id="seq-conc" class="input" style="width:90px" type="number" value="10" min="1" />
+              </div>
+            </div>
+            <div class="col">
+              <label class="field-label">Analysis</label>
+              <div id="seq-results" class="raw" style="flex:1;overflow:auto;">Run a sequence to see randomness analysis.</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- DECODER -->
+        <section class="view" id="view-decoder">
+          <div class="toolbar">
+            <span class="field-label">Decoder</span>
+            <span class="muted">Stack transforms top-to-bottom; each step feeds the next.</span>
+            <div class="spacer"></div>
+            <button class="btn sm" id="decoderClear">Clear all</button>
+          </div>
+          <div id="decoderChain" style="flex:1; overflow:auto; padding:12px; display:flex; flex-direction:column; gap:10px;">
+            <div class="decoder-step" style="display:flex; flex-direction:column; gap:6px;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <label class="field-label">Input</label>
+                <div class="spacer"></div>
+                <select class="input decoder-pick" style="width:200px"></select>
+              </div>
+              <textarea class="code-area decoder-input" spellcheck="false" rows="6"
+                style="flex:none; min-height:120px;"
+                placeholder="Paste text to decode/encode…"></textarea>
+            </div>
+          </div>
+        </section>
+
+        <!-- COMPARER -->
+        <section class="view" id="view-comparer">
+          <div class="toolbar">
+            <button class="btn primary" id="cmpCompareBtn">Compare</button>
+            <div class="seg" id="cmpModeSeg">
+              <button class="seg-btn active" data-cmode="line">Line</button>
+              <button class="seg-btn" data-cmode="word">Word</button>
+            </div>
+            <button class="btn sm" id="cmpSwapBtn">⇄ Swap A/B</button>
+            <button class="btn sm" id="cmpClearBtn">Clear</button>
+            <span id="cmpStats" class="muted"></span>
+          </div>
+          <div class="split">
+            <div class="col">
+              <label class="field-label">A (original)</label>
+              <textarea id="cmpA" class="code-area" spellcheck="false" placeholder="Paste the first blob here…"></textarea>
+            </div>
+            <div class="col">
+              <label class="field-label">B (changed)</label>
+              <textarea id="cmpB" class="code-area" spellcheck="false" placeholder="Paste the second blob here…"></textarea>
+            </div>
+          </div>
+          <div class="cmp-result-wrap">
+            <label class="field-label">Diff</label>
+            <pre class="raw diff-pane" id="cmpResult">Enter text in A and B, then Compare.</pre>
+          </div>
+        </section>
+
+        <!-- DISCOVERY -->
+        <section class="view" id="view-discovery">
+          <div class="toolbar">
+            <input id="discBaseUrl" class="input grow" placeholder="https://target  (base URL)" />
+            <input id="discExt" class="input" style="width:170px" placeholder="exts: ,.php,/" title="Comma-separated. Empty = none" />
+            <input id="discConc" class="input" style="width:70px" type="number" min="1" max="100" value="15" title="Concurrency" />
+            <button class="btn primary" id="discStartBtn">Start</button>
+            <button class="btn" id="discStopBtn" disabled>Stop</button>
+          </div>
+          <div class="toolbar">
+            <span id="discProgress" class="muted">Idle.</span>
+          </div>
+          <div class="split">
+            <div class="table-wrap">
+              <table id="discTable">
+                <thead>
+                  <tr>
+                    <th style="width:70px">Status</th>
+                    <th style="width:90px">Length</th>
+                    <th>Path</th>
+                    <th style="width:150px">Type</th>
+                  </tr>
+                </thead>
+                <tbody id="discBody"></tbody>
+              </table>
+            </div>
+            <div class="detail">
+              <div class="detail-toolbar">
+                <span class="muted">Custom wordlist (one per line — empty uses the built-in list)</span>
+              </div>
+              <textarea id="discWordlist" class="code-area" spellcheck="false"
+                placeholder="admin&#10;login&#10;.git/HEAD&#10;backup"></textarea>
+            </div>
+          </div>
+        </section>
+
+        <!-- SCOPE -->
+        <section class="view" id="view-scope">
+          <div class="toolbar">
+            <select id="scopeMode" class="input" style="width:110px">
+              <option value="include">Include</option>
+              <option value="exclude">Exclude</option>
+            </select>
+            <input id="scopeHost" class="input grow" placeholder="host — example.com, *.example.com, or *" />
+            <input id="scopePort" class="input" style="width:90px" type="number" placeholder="port" />
+            <input id="scopePath" class="input" style="width:160px" placeholder="/path prefix (optional)" />
+            <button class="btn primary" id="scopeAddBtn">Add rule</button>
+          </div>
+          <div class="table-wrap">
+            <table id="scopeTable">
+              <thead>
+                <tr>
+                  <th style="width:60px">On</th>
+                  <th style="width:90px">Mode</th>
+                  <th>Host</th>
+                  <th style="width:80px">Port</th>
+                  <th>Path prefix</th>
+                  <th style="width:70px"></th>
+                </tr>
+              </thead>
+              <tbody id="scopeBody"></tbody>
+            </table>
+          </div>
+          <p class="muted" style="padding:10px 12px">
+            With no enabled <b>include</b> rules, everything is in scope. A plain host (example.com)
+            also matches its subdomains; use a leading dot or <code>*.</code> to match subdomains only.
+          </p>
+        </section>
+
+        <!-- MATCH & REPLACE -->
+        <section class="view" id="view-matchreplace">
+          <div class="toolbar">
+            <span class="muted">Rewrite parts of requests &amp; responses as they pass through. Rules run top-to-bottom; enabled only.</span>
+            <div class="spacer"></div>
+            <button class="btn" id="mrNewBtn">+ New rule</button>
+          </div>
+          <div class="split">
+            <div class="table-wrap">
+              <table id="mrTable">
+                <thead>
+                  <tr>
+                    <th style="width:40px">On</th>
+                    <th>Name</th>
+                    <th style="width:96px">Part</th>
+                    <th style="width:60px">Type</th>
+                    <th>Match</th>
+                    <th>Replace</th>
+                    <th style="width:44px"></th>
+                  </tr>
+                </thead>
+                <tbody id="mrBody"></tbody>
+              </table>
+            </div>
+            <div class="detail" id="mrForm">
+              <div class="detail-toolbar">
+                <span id="mrFormTitle" class="muted">New rule</span>
+                <div class="detail-actions">
+                  <button class="btn sm" id="mrCancelBtn">Cancel</button>
+                  <button class="btn sm" id="mrDeleteBtn" disabled>Delete</button>
+                  <button class="btn sm primary" id="mrSaveBtn">Save</button>
+                </div>
+              </div>
+              <div style="padding:12px; overflow:auto; display:flex; flex-direction:column; gap:6px;">
+                <label class="field-label">Name</label>
+                <input id="mrName" class="input" placeholder="Rule name" />
+                <label class="field-label">Part</label>
+                <select id="mrPart" class="input">
+                  <option value="req-header">Request header</option>
+                  <option value="req-body">Request body</option>
+                  <option value="req-firstline">Request first line (METHOD path)</option>
+                  <option value="res-header">Response header</option>
+                  <option value="res-body">Response body</option>
+                  <option value="res-status">Response status</option>
+                </select>
+                <label class="field-label">Match type</label>
+                <select id="mrType" class="input">
+                  <option value="string">String (literal)</option>
+                  <option value="regex">Regex (global)</option>
+                </select>
+                <label class="field-label">Match</label>
+                <textarea id="mrMatch" class="code-area" style="flex:none; height:64px;" spellcheck="false" placeholder="text or pattern to find — empty on a header rule adds a new header"></textarea>
+                <label class="field-label">Replace</label>
+                <textarea id="mrReplace" class="code-area" style="flex:none; height:64px;" spellcheck="false" placeholder="replacement text ($1.. backrefs for regex)"></textarea>
+                <label class="field-label">Comment</label>
+                <input id="mrComment" class="input" placeholder="optional note" />
+                <label class="switch" style="margin-top:6px;">
+                  <input type="checkbox" id="mrEnabled" checked />
+                  <span class="slider"></span>
+                  <span class="switch-label">Enabled</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- WEBSOCKETS -->
+        <section class="view" id="view-websockets">
+          <div class="split">
+            <div class="table-wrap narrow">
+              <table>
+                <thead><tr><th>WebSocket connections</th></tr></thead>
+                <tbody id="wsBody"></tbody>
+              </table>
+            </div>
+            <div class="detail">
+              <div class="detail-toolbar">
+                <span id="wsTitle" class="muted">Select a connection.</span>
+              </div>
+              <div id="wsFrames" class="ws-frames"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- COLLABORATOR -->
+        <section class="view" id="view-collaborator">
+          <div class="toolbar">
+            <button class="btn primary" id="collabStartBtn">Start tunnel</button>
+            <button class="btn" id="collabStopBtn" disabled>Stop</button>
+            <button class="btn" id="collabGenBtn" disabled>Generate payload</button>
+            <span id="collabStatusText" class="muted">Checking cloudflared…</span>
+            <div class="spacer"></div>
+            <code id="collabUrl" class="path"></code>
+          </div>
+          <div class="split">
+            <div class="table-wrap">
+              <table id="collabTable">
+                <thead>
+                  <tr>
+                    <th style="width:52px">#</th>
+                    <th style="width:70px">Method</th>
+                    <th>Path</th>
+                    <th style="width:110px">Payload</th>
+                    <th style="width:120px">Source</th>
+                    <th style="width:90px">Time</th>
+                  </tr>
+                </thead>
+                <tbody id="collabBody"></tbody>
+              </table>
+            </div>
+            <div class="detail">
+              <div class="detail-toolbar">
+                <span id="collabDetailMeta" class="muted">Select an interaction.</span>
+              </div>
+              <pre class="raw" id="collabRaw">No interactions yet.
+
+Start the tunnel, click "Generate payload", and use that URL as an out-of-band callback in a test (blind SSRF, blind XSS beacon, webhook, XXE). Any HTTP hit shows up here.
+
+Requires cloudflared:  brew install cloudflared</pre>
+            </div>
+          </div>
+        </section>
+
+        <!-- BUILD — Claude agent for security research -->
+        <section class="view" id="view-build">
+          <div class="build-wrap">
+            <aside class="chat-sidebar">
+              <button class="btn primary chat-new" id="chatNewBtn">＋ New chat</button>
+              <div id="chatList" class="chat-list"></div>
+            </aside>
+            <div class="chat-pane">
+              <div class="toolbar">
+                <select id="chatModel" class="input" style="width:150px" title="Model"></select>
+                <label class="switch" title="Let Claude write files and run commands (build & run PoCs/exploits in the workspace)">
+                  <input type="checkbox" id="chatAgentMode" />
+                  <span class="slider"></span><span class="switch-label">Agent mode</span>
+                </label>
+                <button class="btn sm" id="chatAuditAllBtn" title="Autonomously enumerate and audit ALL captured traffic">🔍 Audit all traffic</button>
+                <span class="muted" id="chatWorkspace"></span>
+                <div class="spacer"></div>
+                <button class="btn" id="chatStopBtn" disabled>Stop</button>
+              </div>
+              <div id="chatMessages" class="chat-messages">
+                <div class="chat-hello muted">
+                  <b>Claude for security research.</b> Ask me to audit the proxy traffic, hunt for
+                  vulns, or build a PoC. I can read every captured request
+                  (<code>list_flows</code>, <code>get_flow</code>, <code>search_flows</code>),
+                  review client-side JS (<code>list_js_files</code>), replay &amp; tamper
+                  (<code>send_request</code>), drive the proxied browser
+                  (<code>open_in_browser</code>), and — with <b>Agent mode</b> on — write and run
+                  exploit code in a workspace.
+                  <br /><br />Try: “Audit every request for auth/IDOR issues”, or
+                  “Build a Python PoC for the IDOR on /users/{id}”.
+                </div>
+              </div>
+              <div class="chat-input-row">
+                <textarea id="chatInput" class="code-area" spellcheck="false"
+                  placeholder="Ask Claude…  (Enter to send, Shift+Enter for newline)"></textarea>
+                <button class="btn primary" id="chatSendBtn">Send</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SETTINGS -->
+        <section class="view" id="view-settings">
+          <div class="settings-wrap">
+            <h2>Settings</h2>
+
+            <div class="setting">
+              <label>Proxy port</label>
+              <input id="setPort" class="input" style="width:120px" type="number" />
+              <p class="hint">Restart the proxy after changing the port.</p>
+            </div>
+
+            <div class="setting">
+              <label>Claude model for audits</label>
+              <select id="setModel" class="input" style="width:220px"></select>
+              <p class="hint">
+                Used for endpoint and JS audits. Bulk JS auditing is cheaper on
+                haiku/sonnet.
+              </p>
+            </div>
+
+            <div class="setting">
+              <label>Testing browser</label>
+              <div class="row">
+                <select id="setBrowser" class="input" style="width:240px">
+                  <option value="">Auto (first found)</option>
+                </select>
+                <button class="btn sm" id="openBrowserBtn2">🌐 Open now</button>
+              </div>
+              <p class="hint">
+                Opens a Chromium-family browser (Chrome, Chromium, Brave, Edge)
+                pre-pointed at the proxy in an isolated profile, accepting the
+                MITM certificate automatically — no manual proxy or certificate
+                setup needed. Even <code>localhost</code> is routed through the
+                proxy.
+              </p>
+            </div>
+
+            <div class="setting">
+              <label>CA certificate</label>
+              <div class="row">
+                <code id="caPathText" class="path"></code>
+                <button class="btn sm" id="revealCaBtn">Reveal in Finder</button>
+              </div>
+              <p class="hint">
+                For HTTPS in your own browser, trust this certificate (open it,
+                add to the <b>login</b> keychain, set <b>Always Trust</b>) and set
+                your HTTP &amp; HTTPS proxy to
+                <code id="proxyAddr">127.0.0.1</code>. The built-in “Open browser”
+                skips all of this.
+              </p>
+            </div>
+
+            <div class="setting">
+              <label>Keyboard shortcuts</label>
+              <div id="shortcutSettings"></div>
+              <div class="row" style="margin-top:8px">
+                <button class="btn sm" id="shortcutResetBtn">Reset to defaults</button>
+                <span class="muted">Click “Change”, then press the new key combo (must include ⌘/Ctrl).</span>
+              </div>
+            </div>
+
+            <div class="setting">
+              <label>Claude account</label>
+              <div class="row">
+                <span id="authDetail" class="muted">Checking…</span>
+              </div>
+              <div class="row" style="margin-top:8px">
+                <button class="btn primary sm" id="authLoginBtn">Sign in with Chrome</button>
+                <button class="btn sm" id="authLogoutBtn">Sign out</button>
+                <button class="btn sm" id="recheckAuthBtn2">Re-check</button>
+              </div>
+              <p class="hint" id="authHint">
+                Audits use your Claude subscription via <code>claude login</code> —
+                no API key needed. “Sign in with Chrome” opens the same browser
+                OAuth flow Claude Code uses. A set <code>ANTHROPIC_API_KEY</code>
+                is ignored for audits so it can’t shadow your login.
+              </p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="shortcutHelp" class="overlay hidden">
+      <div class="overlay-card">
+        <div class="overlay-head">
+          <span>Keyboard shortcuts</span>
+          <button class="btn sm" id="shortcutClose">Close</button>
+        </div>
+        <div id="shortcutList"></div>
+        <p class="muted" style="margin:10px 0 0">On macOS ⌘ is the modifier; use Ctrl elsewhere. Press ⌘/ anytime.</p>
+      </div>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="transforms.js"></script>
+    <script src="diff.js"></script>
+    <script src="sitemap.js"></script>
+    <script src="msgview.js"></script>
+    <script src="targetview.js"></script>
+    <script src="httpfilter.js"></script>
+    <script src="ctxmenu.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
