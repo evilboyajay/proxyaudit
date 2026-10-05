@@ -139,4 +139,50 @@ function launch({ port, binaryPath, profileDir, startUrl, cdpPort }) {
   });
 }
 
-module.exports = { detect, launch, CDP_PORT };
+/**
+ * Launch a dedicated, CDP-controllable browser for the Build agent. Unlike
+ * launch() (which uses `open -na` and the shared profile for the user's manual
+ * "Open browser"), this directly spawns the binary with its own profile and the
+ * remote-debugging port, so the agent can reliably drive/crawl it. `port` must
+ * be the PROXY's actually-bound port.
+ */
+function launchAgent({ port, binaryPath, startUrl, cdpPort }) {
+  const browsers = detect();
+  if (!browsers.length) {
+    return { ok: false, error: 'No Chromium-family browser found (install Chrome/Chromium/Brave/Edge).' };
+  }
+  let bin = binaryPath;
+  if (!bin || !fs.existsSync(bin)) bin = browsers[0].path;
+  const chosen = browsers.find((b) => b.path === bin) || browsers[0];
+  // One shared profile for the manual "Open browser" button AND the Build agent,
+  // so there's a single CDP-controllable testing browser.
+  const profile = path.join(os.homedir(), '.proxyaudit', 'browser-profile');
+  fs.mkdirSync(profile, { recursive: true });
+
+  const flags = [
+    `--proxy-server=http://127.0.0.1:${port}`,
+    '--proxy-bypass-list=<-loopback>',
+    '--ignore-certificate-errors',
+    '--test-type',
+    `--user-data-dir=${profile}`,
+    `--remote-debugging-port=${cdpPort || CDP_PORT}`,
+    '--remote-allow-origins=*',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--no-service-autorun',
+    '--disable-background-networking',
+    '--new-window',
+    startUrl || 'about:blank',
+  ];
+
+  try {
+    const child = spawn(bin, flags, { detached: true, stdio: 'ignore' });
+    child.on('error', () => {});
+    child.unref();
+    return { ok: true, browser: chosen.name, port };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+module.exports = { detect, launch, launchAgent, CDP_PORT };

@@ -89,13 +89,13 @@
               <table id="flowTable">
                 <thead>
                   <tr>
-                    <th style="width:62px">#</th>
-                    <th style="width:70px">Method</th>
-                    <th>Host</th>
-                    <th>Path</th>
-                    <th style="width:60px">Status</th>
-                    <th style="width:120px">Type</th>
-                    <th style="width:80px">Length</th>
+                    <th style="width:62px" data-key="ts" data-label="#">#</th>
+                    <th style="width:70px" data-key="method" data-label="Method">Method</th>
+                    <th data-key="host" data-label="Host">Host</th>
+                    <th data-key="path" data-label="Path">Path</th>
+                    <th style="width:60px" data-key="status" data-label="Status">Status</th>
+                    <th style="width:120px" data-key="mime" data-label="Type">Type</th>
+                    <th style="width:80px" data-key="length" data-label="Length">Length</th>
                   </tr>
                 </thead>
                 <tbody id="flowBody"></tbody>
@@ -600,6 +600,12 @@ Requires cloudflared:  brew install cloudflared</pre>
                 <div class="spacer"></div>
                 <button class="btn" id="chatStopBtn" disabled>Stop</button>
               </div>
+              <div id="chatGoalBar" class="chat-goal hidden">
+                <span class="goal-ico">🎯</span>
+                <span id="chatGoalText" class="goal-text"></span>
+                <div class="spacer"></div>
+                <button class="btn sm" id="chatGoalClear">Clear goal</button>
+              </div>
               <div id="chatMessages" class="chat-messages">
                 <div class="chat-hello muted">
                   <b>Claude for security research.</b> Ask me to audit the proxy traffic, hunt for
@@ -615,7 +621,7 @@ Requires cloudflared:  brew install cloudflared</pre>
               </div>
               <div class="chat-input-row">
                 <textarea id="chatInput" class="code-area" spellcheck="false"
-                  placeholder="Ask Claude…  (Enter to send, Shift+Enter for newline)"></textarea>
+                  placeholder="Ask Claude…  ( / for commands · Enter to send · Shift+Enter newline )"></textarea>
                 <button class="btn primary" id="chatSendBtn">Send</button>
               </div>
             </div>

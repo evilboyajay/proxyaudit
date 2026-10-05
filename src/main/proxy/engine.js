@@ -186,22 +186,38 @@ class ProxyEngine extends EventEmitter {
     });
 
     proxy.onWebSocketConnection((ctx, callback) => {
-      this._onWsOpen(ctx);
+      try {
+        this._onWsOpen(ctx);
+      } catch (e) {
+        this.emit('error', `ws-open: ${e.message}`);
+      }
       return callback();
     });
 
     proxy.onWebSocketSend((ctx, message, flags, callback) => {
-      this._onWsFrame(ctx, 'outgoing', message, flags);
+      try {
+        this._onWsFrame(ctx, 'outgoing', message, flags);
+      } catch (e) {
+        this.emit('error', `ws-send: ${e.message}`);
+      }
       return callback(null, message, flags);
     });
 
     proxy.onWebSocketMessage((ctx, message, flags, callback) => {
-      this._onWsFrame(ctx, 'incoming', message, flags);
+      try {
+        this._onWsFrame(ctx, 'incoming', message, flags);
+      } catch (e) {
+        this.emit('error', `ws-message: ${e.message}`);
+      }
       return callback(null, message, flags);
     });
 
     proxy.onWebSocketClose((ctx, code, message, callback) => {
-      if (ctx.__wsConnId) this.emit('ws-close', ctx.__wsConnId);
+      try {
+        if (ctx.__wsConnId) this.emit('ws-close', ctx.__wsConnId);
+      } catch (_) {
+        /* ignore */
+      }
       return callback(code, message);
     });
   }
@@ -379,15 +395,18 @@ class ProxyEngine extends EventEmitter {
     this._wsSeq += 1;
     const connId = `w${Date.now().toString(36)}-${this._wsSeq}`;
     ctx.__wsConnId = connId;
-    const creq = ctx.clientToProxyWebSocketRequest;
-    const host = creq.headers.host || '';
+    // The request object can be missing/partial on some upgrades — guard it.
+    const creq =
+      ctx.clientToProxyWebSocketRequest || ctx.clientToProxyRequest || {};
+    const headers = creq.headers || {};
+    const host = headers.host || '';
     const scheme = ctx.isSSL ? 'wss' : 'ws';
     this.emit('ws-open', {
       id: connId,
       ts: Date.now(),
-      url: `${scheme}://${host}${creq.url}`,
+      url: `${scheme}://${host}${creq.url || ''}`,
       host,
-      headers: { ...creq.headers },
+      headers: { ...headers },
     });
   }
 

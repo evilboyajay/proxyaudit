@@ -50,11 +50,12 @@
       row.className = 'ctx-item';
       if (it.disabled) row.classList.add('disabled');
       if (it.danger) row.classList.add('danger');
+      if (it.highlight) row.classList.add('ctx-ai');
       row.setAttribute('role', 'menuitem');
 
       const label = document.createElement('span');
       label.className = 'ctx-label';
-      label.textContent = it.label || '';
+      label.textContent = (it.icon ? it.icon + '  ' : '') + (it.label || '');
       row.appendChild(label);
 
       if (it.shortcut) {
@@ -155,10 +156,18 @@
     return typeof fn === 'function' ? () => fn(arg) : undefined;
   }
 
+  function aiItems(flow, h) {
+    return [
+      { label: 'Send to AI — new chat', icon: '🤖', highlight: true, action: call(h.sendToAINew, flow), disabled: !h.sendToAINew },
+      { label: 'Send to AI — current chat', icon: '🤖', highlight: true, action: call(h.sendToAICurrent, flow), disabled: !h.sendToAICurrent },
+      { separator: true },
+    ];
+  }
+
   function historyMenuItems(flow, h) {
     h = h || {};
     const hasResp = !!(flow && flow.response);
-    return [
+    return aiItems(flow, h).concat([
       { label: 'Add to scope', action: call(h.addToScope, flow), disabled: !h.addToScope },
       { separator: true },
       { label: 'Send to Repeater', shortcut: '⌘R', action: call(h.sendToRepeater, flow), disabled: !h.sendToRepeater },
@@ -173,12 +182,12 @@
       { label: 'Clear history', action: typeof h.clearHistory === 'function' ? () => h.clearHistory() : undefined, disabled: !h.clearHistory, danger: true },
       { separator: true },
       { label: 'Save item', action: call(h.saveItem, flow), disabled: !h.saveItem },
-    ];
+    ]);
   }
 
   function editorMenuItems(flow, h) {
     h = h || {};
-    return [
+    return aiItems(flow, h).concat([
       { label: 'Send to Repeater', shortcut: '⌘R', action: call(h.sendToRepeater, flow), disabled: !h.sendToRepeater },
       { label: 'Send to Intruder', shortcut: '⌘I', action: call(h.sendToIntruder, flow), disabled: !h.sendToIntruder },
       { label: 'Send to Comparer', action: call(h.sendToComparer, flow), disabled: !h.sendToComparer },
@@ -188,7 +197,7 @@
       { label: 'Copy URL', action: call(h.copyUrl, flow), disabled: !h.copyUrl },
       { label: 'Copy as curl command (bash)', action: call(h.copyCurl, flow), disabled: !h.copyCurl },
       { label: 'Copy to clipboard', action: call(h.copyToClipboard, flow), disabled: !h.copyToClipboard },
-    ];
+    ]);
   }
 
   window.ContextMenu = {

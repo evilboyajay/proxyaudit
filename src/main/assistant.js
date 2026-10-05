@@ -321,7 +321,11 @@ class Assistant {
       cwd: this.workspace,
       env: sdkEnv(),
       abortController: controller,
-      includePartialMessages: false,
+      includePartialMessages: true, // stream text/thinking live, not just at the end
+      // Don't load the user's global Claude Code settings/MCP servers (e.g.
+      // Claude Docs) — isolate to OUR in-process proxy server + built-in tools,
+      // so the proxy tools are always directly available (not deferred/missing).
+      settingSources: [],
     };
     // A falsy model means "use the Claude Code account default".
     if (model) options.model = model;
@@ -329,6 +333,7 @@ class Assistant {
 
     let newSessionId = sessionId || null;
     let authFailed = false;
+    let sawTextDelta = false; // whether the current assistant message streamed text
     try {
       for await (const msg of query({ prompt: message, options })) {
         if (msg.type === 'system') {
@@ -338,12 +343,28 @@ class Assistant {
             controller.abort();
             break;
           }
-        } else if (msg.type === 'assistant' && msg.message && msg.message.content) {
-          for (const block of msg.message.content) {
-            if (block.type === 'text' && block.text) onEvent({ type: 'text', text: block.text });
-            else if (block.type === 'tool_use') onEvent({ type: 'tool_use', name: block.name, input: block.input });
-            else if (block.type === 'thinking' && block.thinking) onEvent({ type: 'thinking', text: block.thinking });
+        } else if (msg.type === 'stream_event' && msg.event) {
+          // Live token streaming (text + thinking) as the model writes.
+          const ev = msg.event;
+          if (ev.type === 'content_block_delta' && ev.delta) {
+            if (ev.delta.type === 'text_delta' && ev.delta.text) {
+              sawTextDelta = true;
+              onEvent({ type: 'text', text: ev.delta.text });
+            } else if (ev.delta.type === 'thinking_delta' && ev.delta.thinking) {
+              onEvent({ type: 'thinking', text: ev.delta.thinking });
+            }
           }
+        } else if (msg.type === 'assistant' && msg.message && msg.message.content) {
+          // The complete message: emit tool calls; text/thinking already streamed
+          // via stream_event (only re-emit text if nothing streamed, as a fallback).
+          for (const block of msg.message.content) {
+            if (block.type === 'text' && block.text) {
+              if (!sawTextDelta) onEvent({ type: 'text', text: block.text });
+            } else if (block.type === 'tool_use') {
+              onEvent({ type: 'tool_use', name: block.name, input: block.input });
+            }
+          }
+          sawTextDelta = false;
         } else if (msg.type === 'user' && msg.message && Array.isArray(msg.message.content)) {
           for (const block of msg.message.content) {
             if (block.type === 'tool_result') {

@@ -279,12 +279,46 @@ function rowHtml(f) {
   );
 }
 let renderScheduled = false;
+const flowSort = { key: null, dir: 1 }; // null = capture order
+const FLOW_NUMERIC = { ts: 1, status: 1, length: 1 };
 function renderFlowTable() {
   renderScheduled = false;
   const rows = [];
   for (const f of flows.values()) if (flowMatches(f)) rows.push(f);
+  if (flowSort.key) {
+    const k = flowSort.key;
+    const num = FLOW_NUMERIC[k];
+    rows.sort((a, b) => {
+      let av = a[k], bv = b[k];
+      if (num) { av = Number(av) || 0; bv = Number(bv) || 0; return (av - bv) * flowSort.dir; }
+      av = (av == null ? '' : String(av)).toLowerCase();
+      bv = (bv == null ? '' : String(bv)).toLowerCase();
+      return av < bv ? -flowSort.dir : av > bv ? flowSort.dir : 0;
+    });
+  }
   flowBody.innerHTML = rows.map(rowHtml).join('');
   $('#flowCount').textContent = flows.size;
+}
+// Click a column header to sort (toggles asc/desc); click again to cycle off.
+$$('#flowTable thead th').forEach((th) => {
+  if (!th.dataset.key) return;
+  th.style.cursor = 'pointer';
+  th.addEventListener('click', () => {
+    const key = th.dataset.key;
+    if (flowSort.key !== key) { flowSort.key = key; flowSort.dir = 1; }
+    else if (flowSort.dir === 1) { flowSort.dir = -1; }
+    else { flowSort.key = null; } // third click: back to capture order
+    updateSortHeaders();
+    renderFlowTable();
+  });
+});
+function updateSortHeaders() {
+  $$('#flowTable thead th').forEach((th) => {
+    if (!th.dataset.label) return;
+    const active = flowSort.key === th.dataset.key;
+    th.textContent = th.dataset.label + (active ? (flowSort.dir === 1 ? ' ▲' : ' ▼') : '');
+    th.classList.toggle('sorted', active);
+  });
 }
 function scheduleRender() {
   if (renderScheduled) return;
@@ -295,6 +329,32 @@ function scheduleRender() {
 flowBody.addEventListener('click', (e) => {
   const tr = e.target.closest('tr');
   if (tr) selectFlow(tr.dataset.id);
+});
+
+// Arrow Up/Down move the selection through the active list (like Burp).
+// Reuses each list's own row click handler, and finds the current row by its
+// '.selected' class, so it works for Proxy history, Target contents, WebSockets,
+// and Intruder results alike.
+const ARROW_LISTS = {
+  proxy: '#flowBody', sitemap: '#smContents', websockets: '#wsBody',
+  intruder: '#intrBody', discovery: '#discBody', collaborator: '#collabBody',
+};
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const ae = document.activeElement;
+  if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
+  const view = document.querySelector('.view.active');
+  const sel = view && ARROW_LISTS[view.id.replace('view-', '')];
+  if (!sel) return;
+  const rows = Array.from(document.querySelectorAll(sel + ' tr'));
+  if (!rows.length) return;
+  let idx = rows.findIndex((r) => r.classList.contains('selected'));
+  if (idx === -1) idx = e.key === 'ArrowDown' ? -1 : rows.length;
+  const next = e.key === 'ArrowDown' ? Math.min(rows.length - 1, idx + 1) : Math.max(0, idx - 1);
+  e.preventDefault();
+  rows[next].click();
+  if (typeof rows[next].scrollIntoView === 'function') rows[next].scrollIntoView({ block: 'nearest' });
 });
 
 async function selectFlow(id) {
@@ -354,7 +414,37 @@ function extractLinks(flow) {
   while ((m = bare.exec(body))) out.add(m[0]);
   return Array.from(out);
 }
+function aiPromptForFlow(flow) {
+  const curl = window.ContextMenu && window.ContextMenu.buildCurl
+    ? window.ContextMenu.buildCurl(flow)
+    : `${flow.method} ${flow.url}`;
+  const resHead = flow && flow.response
+    ? `HTTP ${flow.response.status} ${flow.response.statusMessage || ''}\n` +
+      Object.entries(flow.response.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n') +
+      '\n\n' + (flow.response.body || '').slice(0, 8000)
+    : '(no response captured)';
+  const p =
+    'Analyze this captured request for security issues ' +
+    '(auth/session, IDOR & access control, injection, SSRF, secrets/PII exposure, misconfig). ' +
+    'Give concrete, evidence-based findings and, where warranted, how to verify/exploit it. ' +
+    'You can re-run or tamper with the request below using send_request.\n\n' +
+    'Request (curl):\n```bash\n' + curl + '\n```\n\n' +
+    '=== RESPONSE ===\n' + resHead + '\n\n' +
+    (flow && flow.id ? `(This is flow ${flow.id} in the proxy history — use get_flow/send_request to probe further.)` : '');
+  return p.slice(0, 24000);
+}
+function sendFlowToAI(flow, newChat) {
+  if (!flow) return;
+  showView('build');
+  const go = () => sendChat(aiPromptForFlow(flow));
+  if (newChat) { clearGoal(); chatStartNew(); setTimeout(go, 60); }
+  else go();
+  toast('Sent to AI' + (newChat ? ' (new chat)' : ''));
+}
+
 const ctxHistoryHandlers = {
+  sendToAINew: (flow) => sendFlowToAI(flow, true),
+  sendToAICurrent: (flow) => sendFlowToAI(flow, false),
   addToScope: (flow) => {
     api.scopeAdd({ mode: 'include', host: flow.host })
       .then((res) => toast(res && res.ok ? `Added ${flow.host} to scope` : '⚠ Could not add to scope'));
@@ -411,6 +501,15 @@ $('#flowDetail').addEventListener('contextmenu', (e) => {
   if (!flow) return;
   e.preventDefault();
   ContextMenu.show(e.clientX, e.clientY, ContextMenu.editorMenuItems(flow, ctxEditorHandlers));
+});
+// Target (site map) contents rows get the same menu (incl. Send to AI).
+document.addEventListener('contextmenu', async (e) => {
+  const tr = e.target.closest && e.target.closest('#smContents tr');
+  if (!tr || !tr.dataset.id) return;
+  e.preventDefault();
+  const flow = await api.getFlow(tr.dataset.id);
+  if (!flow) return;
+  ContextMenu.show(e.clientX, e.clientY, ContextMenu.historyMenuItems(flow, ctxHistoryHandlers));
 });
 
 // ============================ intercept ===========================
@@ -630,8 +729,66 @@ function chatAppend(cls, html) {
   el.className = 'chat-msg ' + cls;
   el.innerHTML = html;
   $('#chatMessages').appendChild(el);
+  // Keep the live status line pinned to the bottom during a turn.
+  if (chatStatusEl && chatStatusEl.parentNode && !cls.includes('status')) {
+    $('#chatMessages').appendChild(chatStatusEl);
+  }
   $('#chatMessages').scrollTop = $('#chatMessages').scrollHeight;
   return el;
+}
+
+// Claude-Code-style "working" words + a live elapsed/done status line.
+const WORK_WORDS = [
+  'Accomplishing', 'Baking', 'Booping', 'Brewing', 'Calculating', 'Cerebrating',
+  'Channelling', 'Churning', 'Clauding', 'Coalescing', 'Cogitating', 'Computing',
+  'Concocting', 'Conjuring', 'Considering', 'Contemplating', 'Cooking', 'Crafting',
+  'Creating', 'Crunching', 'Deciphering', 'Deliberating', 'Determining', 'Divining',
+  'Doing', 'Effecting', 'Elucidating', 'Enchanting', 'Envisioning', 'Finagling',
+  'Forging', 'Forming', 'Formulating', 'Galloping', 'Generating', 'Germinating',
+  'Hatching', 'Herding', 'Honking', 'Hustling', 'Ideating', 'Imagining',
+  'Incubating', 'Inferring', 'Jamming', 'Manifesting', 'Marinating', 'Meandering',
+  'Moseying', 'Mulling', 'Mustering', 'Musing', 'Noodling', 'Percolating',
+  'Perusing', 'Philosophising', 'Pondering', 'Processing', 'Puttering', 'Puzzling',
+  'Reticulating', 'Ruminating', 'Sautéing', 'Scheming', 'Schlepping', 'Shimmying',
+  'Shucking', 'Simmering', 'Smooshing', 'Spinning', 'Stewing', 'Sussing',
+  'Synthesizing', 'Thinking', 'Tinkering', 'Transmuting', 'Unfurling', 'Vibing',
+  'Whirring', 'Wibbling', 'Working', 'Wrangling',
+];
+let chatTurnWord = '';
+let chatTurnStart = 0;
+let chatTimer = null;
+let chatStatusEl = null;
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + 's';
+  return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+}
+function chatStatusHtml(done, stopped) {
+  const elapsed = fmtElapsed(Date.now() - chatTurnStart);
+  if (done) {
+    const t = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return stopped
+      ? `✦ ${esc(chatTurnWord)} · stopped after ${elapsed}`
+      : `✦ ${esc(chatTurnWord)} for ${elapsed} · done ${t}`;
+  }
+  return `<span class="spinner"></span> ${esc(chatTurnWord)}…  ${elapsed}`;
+}
+function chatStartStatus() {
+  chatTurnWord = WORK_WORDS[Math.floor(Math.random() * WORK_WORDS.length)];
+  chatTurnStart = Date.now();
+  chatStatusEl = chatAppend('status muted', chatStatusHtml(false));
+  if (chatTimer) clearInterval(chatTimer);
+  chatTimer = setInterval(() => {
+    if (chatStatusEl) chatStatusEl.innerHTML = chatStatusHtml(false);
+  }, 1000);
+}
+function chatFinishStatus(stopped) {
+  if (chatTimer) { clearInterval(chatTimer); chatTimer = null; }
+  if (chatStatusEl) {
+    chatStatusEl.innerHTML = chatStatusHtml(true, stopped);
+    chatStatusEl.classList.add('done');
+    chatStatusEl = null; // leave it as this turn's footer
+  }
 }
 function chatCloseStream() {
   if (chatStreamEl && !chatStreamBuf.trim()) chatStreamEl.remove();
@@ -644,8 +801,20 @@ function chatFlushAssistantText() {
   }
 }
 function chatSetBusy(busy) {
-  $('#chatSendBtn').disabled = busy;
+  // The Send button doubles as Stop while a response is running.
+  const sb = $('#chatSendBtn');
+  sb.textContent = busy ? 'Stop' : 'Send';
+  sb.classList.toggle('danger', busy);
   $('#chatStopBtn').disabled = !busy;
+}
+function stopChat() {
+  if (chatCurrentTurn) {
+    api.assistantStop(chatCurrentTurn);
+    chatCurrentTurn = null;
+    chatSetBusy(false);
+    chatFinishStatus(true);
+  }
+  if (chatGoal) { clearGoal(); toast('Goal stopped'); }
 }
 function chatClearPending() {
   const p = $('#chatMessages .chat-msg.pending');
@@ -731,6 +900,8 @@ async function chatOpen(id) {
   let rec = null;
   try { rec = await api.chatGet(id); } catch (_) {}
   if (!rec) return;
+  if (chatTimer) { clearInterval(chatTimer); chatTimer = null; }
+  chatStatusEl = null;
   chatActiveId = id;
   chatSessionId = rec.sessionId || null;
   chatStreamEl = null;
@@ -741,6 +912,8 @@ async function chatOpen(id) {
 }
 function chatStartNew() {
   if (chatCurrentTurn) return;
+  if (chatTimer) { clearInterval(chatTimer); chatTimer = null; }
+  chatStatusEl = null;
   chatActiveId = null;
   chatSessionId = null;
   chatStreamEl = null;
@@ -756,20 +929,129 @@ async function chatEnsureActive() {
   return chatActiveId;
 }
 
-async function sendChat() {
+// ---- goal / slash commands (Claude-Code-style) ----
+let chatGoal = null;
+let chatGoalIter = 0;
+let chatTurnText = '';
+const CHAT_GOAL_MAX = 30;
+const CHAT_HELP =
+  '**Commands**\n' +
+  '- `/goal <objective>` — work autonomously toward a goal; I keep going across turns until I reply `GOAL COMPLETE`\n' +
+  '- `/goal clear` — stop the goal\n' +
+  '- `/agent [on|off]` — toggle Agent mode (write files, run commands, drive the browser)\n' +
+  '- `/model <name>` — switch model\n' +
+  '- `/clear` — start a new conversation\n' +
+  '- `/stop` — stop the current run\n' +
+  '- `/help` — this help\n\n' +
+  '**What I can do**: read & replay all proxied traffic (list_flows/get_flow/search_flows/send_request), review captured JS, crawl a site and click through every page (crawl_site/browser_navigate/browser_click), and — in **Agent mode** — write & run exploit/PoC code in the workspace.';
+
+function updateGoalBar() {
+  const bar = $('#chatGoalBar');
+  if (chatGoal) {
+    $('#chatGoalText').textContent = `${chatGoal}  ·  iteration ${chatGoalIter}`;
+    bar.classList.remove('hidden');
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+function clearGoal() {
+  chatGoal = null;
+  chatGoalIter = 0;
+  updateGoalBar();
+}
+function setGoal(text) {
+  chatGoal = text;
+  chatGoalIter = 0;
+  $('#chatAgentMode').checked = true; // goals run with full autonomy
+  updateGoalBar();
+  sendChat(
+    `GOAL: ${text}\n\nWork autonomously toward this goal using every tool available ` +
+      '(crawl/navigate the site, read & replay captured traffic, review JS, write and run code). ' +
+      'Keep going across turns. When the goal is fully achieved, reply with "GOAL COMPLETE" on its own line, then a short summary.'
+  );
+}
+function goalContinue() {
+  if (!chatGoal || chatCurrentTurn) return;
+  sendChat('Continue toward the goal. If it is fully achieved, reply "GOAL COMPLETE".', true);
+}
+function setChatModel(arg) {
+  const q = (arg || '').toLowerCase();
+  const m = modelList.find((x) => x.id.toLowerCase() === q)
+    || modelList.find((x) => x.label.toLowerCase() === q)
+    || modelList.find((x) => (x.id + ' ' + x.label).toLowerCase().includes(q) && q);
+  if (m) {
+    $('#chatModel').value = m.id;
+    api.setSettings({ chatModel: m.id });
+    toast('Model: ' + m.label);
+  } else {
+    toast('Unknown model: ' + arg);
+  }
+}
+function handleSlash(raw) {
+  const cmd = raw.slice(1).split(/\s+/)[0].toLowerCase();
+  const arg = raw.slice(1 + cmd.length).trim();
+  if (cmd === 'help') { chatAppend('assistant', chatMdLite(CHAT_HELP)); return true; }
+  if (cmd === 'clear') { chatStartNew(); return true; }
+  if (cmd === 'stop') { if (chatCurrentTurn) api.assistantStop(chatCurrentTurn); clearGoal(); return true; }
+  if (cmd === 'agent') {
+    const on = arg ? /^(on|1|true|yes)$/i.test(arg) : !$('#chatAgentMode').checked;
+    $('#chatAgentMode').checked = on;
+    toast('Agent mode ' + (on ? 'on' : 'off'));
+    return true;
+  }
+  if (cmd === 'model') { setChatModel(arg); return true; }
+  if (cmd === 'goal') {
+    if (!arg || /^clear$/i.test(arg)) { clearGoal(); toast('Goal cleared'); }
+    else setGoal(arg);
+    return true;
+  }
+  return false; // unknown slash -> send as a normal message
+}
+
+function chatRenderToolUse(name, input) {
+  input = input || {};
+  const n = String(name || '');
+  if (n === 'TodoWrite' && Array.isArray(input.todos)) {
+    const items = input.todos
+      .map((t) => {
+        const mark = t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '◐' : '○';
+        const cls = t.status === 'completed' ? 'todo-done' : t.status === 'in_progress' ? 'todo-active' : '';
+        return `<div class="todo-item ${cls}">${mark} ${esc(t.content || t.activeForm || '')}</div>`;
+      })
+      .join('');
+    return `<div class="chat-tool-name">⚙ To-dos</div><div class="chat-todos">${items}</div>`;
+  }
+  let label = n;
+  let detail = '';
+  if (n === 'Bash') detail = '$ ' + (input.command || '');
+  else if (['Write', 'Edit', 'Read', 'NotebookEdit'].includes(n)) detail = input.file_path || input.path || '';
+  else if (['Grep', 'Glob'].includes(n)) detail = input.pattern || input.query || '';
+  else if (['WebFetch', 'WebSearch'].includes(n)) detail = input.url || input.query || '';
+  else detail = JSON.stringify(input);
+  detail = esc(String(detail)).slice(0, 500);
+  return `<span class="chat-tool-name">⚙ ${esc(label)}</span>${detail ? ` <code>${detail}</code>` : ''}`;
+}
+
+async function sendChat(explicitMsg, isGoal) {
   const input = $('#chatInput');
-  const msg = input.value.trim();
+  const typed = explicitMsg == null;
+  const msg = typed ? input.value.trim() : explicitMsg;
   if (!msg || chatCurrentTurn) return;
-  input.value = '';
+  if (typed) {
+    if (msg.startsWith('/') && handleSlash(msg)) { input.value = ''; return; }
+    input.value = '';
+  }
   await chatEnsureActive();
   await api.chatAppend(chatActiveId, { role: 'user', content: msg });
   chatLoadList();
-  chatAppend('user', esc(msg).replace(/\n/g, '<br>'));
+  if (isGoal) chatAppend('goal-note muted', `↻ continuing toward goal (iteration ${chatGoalIter})`);
+  else chatAppend('user', esc(msg).replace(/\n/g, '<br>'));
   chatCloseStream();
+  chatTurnText = '';
   chatTurnSeq += 1;
   chatCurrentTurn = `turn-${chatTurnSeq}`;
   chatSetBusy(true);
-  chatAppend('pending muted', '<span class="spinner"></span> thinking…');
+  chatStartStatus();
   api.assistantSend({
     turnId: chatCurrentTurn,
     message: msg,
@@ -779,28 +1061,39 @@ async function sendChat() {
   });
 }
 
-$('#chatSendBtn').addEventListener('click', sendChat);
+$('#chatSendBtn').addEventListener('click', () => {
+  if (chatCurrentTurn) stopChat();
+  else sendChat();
+});
 $('#chatInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
     e.preventDefault();
-    sendChat();
+    if (!chatCurrentTurn) sendChat();
+  }
+  // Esc interrupts a running response (Claude-Code-style).
+  if (e.key === 'Escape' && chatCurrentTurn) {
+    e.preventDefault();
+    stopChat();
   }
 });
-$('#chatStopBtn').addEventListener('click', () => {
-  if (chatCurrentTurn) api.assistantStop(chatCurrentTurn);
-});
-$('#chatNewBtn').addEventListener('click', chatStartNew);
+$('#chatStopBtn').addEventListener('click', stopChat);
+$('#chatGoalClear').addEventListener('click', () => { clearGoal(); toast('Goal cleared'); });
+$('#chatNewBtn').addEventListener('click', () => { clearGoal(); chatStartNew(); });
 $('#chatAuditAllBtn').addEventListener('click', () => {
   if (chatCurrentTurn) return;
   $('#chatAgentMode').checked = true;
-  $('#chatInput').value = AUDIT_ALL_PROMPT;
-  sendChat();
+  sendChat(AUDIT_ALL_PROMPT);
 });
 
+let chatThinkEl = null;
+let chatThinkBuf = '';
+function chatCloseThink() { chatThinkEl = null; chatThinkBuf = ''; }
 api.on('evt:assistant-event', ({ turnId, event }) => {
   if (turnId !== chatCurrentTurn && !(event.type === 'done')) return;
   chatClearPending();
   if (event.type === 'text') {
+    chatCloseThink();
+    chatTurnText += event.text;
     if (!chatStreamEl) {
       chatStreamBuf = '';
       chatStreamEl = chatAppend('assistant', '');
@@ -809,10 +1102,10 @@ api.on('evt:assistant-event', ({ turnId, event }) => {
     chatStreamEl.innerHTML = chatMdLite(chatStreamBuf);
     $('#chatMessages').scrollTop = $('#chatMessages').scrollHeight;
   } else if (event.type === 'tool_use') {
+    chatCloseThink();
     chatFlushAssistantText();
     chatCloseStream();
-    const inp = esc(JSON.stringify(event.input || {})).slice(0, 400);
-    chatAppend('tool', `<span class="chat-tool-name">⚙ ${esc(event.name)}</span> <code>${inp}</code>`);
+    chatAppend('tool', chatRenderToolUse(event.name, event.input));
     if (chatActiveId) {
       api.chatAppend(chatActiveId, {
         role: 'tool',
@@ -821,14 +1114,20 @@ api.on('evt:assistant-event', ({ turnId, event }) => {
       });
     }
   } else if (event.type === 'tool_result') {
+    chatCloseThink();
     chatCloseStream();
     chatAppend('tool-result', `<pre class="chat-code">${esc(event.text)}</pre>`);
     if (chatActiveId) {
       api.chatAppend(chatActiveId, { role: 'tool_result', content: (event.text || '').slice(0, 4000) });
     }
   } else if (event.type === 'thinking') {
-    // kept quiet
+    if (!event.text) return;
+    if (!chatThinkEl) { chatThinkBuf = ''; chatThinkEl = chatAppend('thinking muted', ''); }
+    chatThinkBuf += event.text;
+    chatThinkEl.textContent = '💭 ' + chatThinkBuf.slice(-4000);
+    $('#chatMessages').scrollTop = $('#chatMessages').scrollHeight;
   } else if (event.type === 'done') {
+    chatCloseThink();
     chatFlushAssistantText();
     chatCloseStream();
     if (event.sessionId) {
@@ -837,9 +1136,24 @@ api.on('evt:assistant-event', ({ turnId, event }) => {
     }
     chatCurrentTurn = null;
     chatSetBusy(false);
+    chatFinishStatus(!!event.error);
     if (event.error) {
       chatAppend('assistant error', '⚠ ' + esc(event.error));
       if (chatActiveId) api.chatAppend(chatActiveId, { role: 'assistant', content: event.error, meta: { error: true } });
+      clearGoal(); // stop the loop on error
+    } else if (chatGoal) {
+      // Autonomous goal loop: keep going until the agent declares completion.
+      if (/GOAL\s*COMPLETE/i.test(chatTurnText)) {
+        toast('🎯 Goal complete');
+        clearGoal();
+      } else if (chatGoalIter < CHAT_GOAL_MAX) {
+        chatGoalIter += 1;
+        updateGoalBar();
+        setTimeout(() => goalContinue(), 500);
+      } else {
+        toast('🎯 Goal: reached max iterations');
+        clearGoal();
+      }
     }
     chatLoadList();
   }

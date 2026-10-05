@@ -245,6 +245,45 @@ function goto(view) {
   await wait(5);
   check('proxy: → repeater adds tab', window.document.querySelectorAll('#repeaterTabs .tab').length >= 2, 'tabs=' + window.document.querySelectorAll('#repeaterTabs .tab').length);
 
+  // Sortable headers + arrow-key navigation
+  goto('proxy');
+  ['zPOST', 'aGET', 'mPUT'].forEach((tag, i) =>
+    fire('evt:flow-update', { id: 'sf' + i, method: tag.slice(1), scheme: 'https', host: tag[0] + '.com', path: '/' + i, url: 'https://' + tag[0] + '.com/' + i, status: 200 + i, mime: 'text/html', length: 100 * (3 - i) })
+  );
+  await wait(10);
+  const methodTh = Array.from(window.document.querySelectorAll('#flowTable thead th')).find((t) => t.dataset.key === 'method');
+  click(methodTh);
+  await wait(5);
+  const firstMethod = window.document.querySelector('#flowBody tr .method') && window.document.querySelector('#flowBody tr .method').textContent;
+  check('proxy: header click sorts (by method asc)', firstMethod === 'GET', 'first=' + firstMethod);
+  check('proxy: sorted header shows indicator', /▲/.test(methodTh.textContent), 'no arrow: ' + methodTh.textContent);
+  // arrow-down from a selected row moves selection to the next row
+  const firstRow = window.document.querySelector('#flowBody tr');
+  firstRow.click();
+  await wait(5);
+  const beforeSel = window.document.querySelector('#flowBody tr.selected');
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+  await wait(5);
+  const afterSel = window.document.querySelector('#flowBody tr.selected');
+  check('proxy: ArrowDown moves selection to next item', afterSel && beforeSel && afterSel !== beforeSel, 'selection did not move');
+
+  // Right-click "Send to AI"
+  const rowForMenu = window.document.querySelector('#flowBody tr');
+  rowForMenu.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }));
+  await wait(10);
+  const ctxMenu = window.document.querySelector('.ctx-menu');
+  check('ctxmenu: Send to AI item present + highlighted', !!ctxMenu && /Send to AI/.test(ctxMenu.textContent) && !!ctxMenu.querySelector('.ctx-item.ctx-ai'), 'no AI item');
+  const aiItem = ctxMenu && Array.from(ctxMenu.querySelectorAll('.ctx-item.ctx-ai')).find((x) => /new chat/.test(x.textContent));
+  const sendsBeforeAI = calls.assistantSend.length;
+  if (aiItem) aiItem.click();
+  await wait(90);
+  check('ctxmenu: Send to AI (new chat) opens Build + sends', $('#view-build').classList.contains('active') && calls.assistantSend.length > sendsBeforeAI, 'AI send did not fire');
+  check('ctxmenu: Send to AI payload is a curl command', /curl /.test(calls.assistantSend[calls.assistantSend.length - 1][0].message || ''), 'no curl in AI message');
+  // complete the AI turn so it doesn't block the next Build test
+  const aiTurn = calls.assistantSend[calls.assistantSend.length - 1][0].turnId;
+  fire('evt:assistant-event', { turnId: aiTurn, event: { type: 'done', sessionId: 'sess-1' } });
+  await wait(5);
+
   // 8-9) Build tab: Claude agent chat
   goto('build');
   check('build: workspace shown on init', /workspace:/.test($('#chatWorkspace').textContent), 'no workspace');
@@ -254,8 +293,9 @@ function goto(view) {
   await wait(30);
   check('build: send persists + calls assistantSend', calls.assistantSend.length >= 1 && calls.chatCreate.length >= 1, 'assistantSend/chatCreate not called');
   check('build: user message rendered', /Audit every request/.test($('#chatMessages').textContent), 'no user bubble');
-  const turn = calls.assistantSend[0][0].turnId;
+  const turn = calls.assistantSend[calls.assistantSend.length - 1][0].turnId;
   check('build: send is busy (stop enabled)', !$('#chatStopBtn').disabled, 'stop not enabled');
+  check('build: Send button becomes Stop while running', $('#chatSendBtn').textContent === 'Stop', 'send label=' + $('#chatSendBtn').textContent);
   fire('evt:assistant-event', { turnId: turn, event: { type: 'tool_use', name: 'mcp__proxy__list_flows', input: {} } });
   await wait(5);
   check('build: tool-use card rendered', /list_flows/.test($('#chatMessages').textContent), 'no tool card');
@@ -265,8 +305,41 @@ function goto(view) {
   fire('evt:assistant-event', { turnId: turn, event: { type: 'done', sessionId: 'sess-1' } });
   await wait(5);
   check('build: done re-enables send', !$('#chatSendBtn').disabled && $('#chatStopBtn').disabled, 'still busy after done');
+  check('build: shows done status line', !!window.document.querySelector('.chat-msg.status.done') && /·\s*done/.test($('#chatMessages').textContent), 'no done status');
   click($('#chatNewBtn'));
   check('build: new chat resets messages', /New chat/.test($('#chatMessages').textContent), 'not reset');
+
+  // Slash commands + autonomous goal
+  setVal($('#chatInput'), '/help');
+  click($('#chatSendBtn'));
+  await wait(5);
+  check('build: /help shows commands', /Commands/.test($('#chatMessages').textContent), 'no help');
+  setVal($('#chatInput'), '/agent on');
+  click($('#chatSendBtn'));
+  await wait(5);
+  check('build: /agent on toggles Agent mode', $('#chatAgentMode').checked === true, 'agent not on');
+  const sendsBefore = calls.assistantSend.length;
+  setVal($('#chatInput'), '/goal find all IDOR issues');
+  click($('#chatSendBtn'));
+  await wait(30);
+  check('build: /goal shows goal bar', !$('#chatGoalBar').classList.contains('hidden'), 'goal bar hidden');
+  check('build: /goal starts a turn (agent mode)', calls.assistantSend.length > sendsBefore && $('#chatAgentMode').checked, 'goal did not start');
+  const gturn = calls.assistantSend[calls.assistantSend.length - 1][0].turnId;
+  fire('evt:assistant-event', { turnId: gturn, event: { type: 'text', text: 'Done.\nGOAL COMPLETE' } });
+  fire('evt:assistant-event', { turnId: gturn, event: { type: 'done', sessionId: 'sess-1' } });
+  await wait(10);
+  check('build: GOAL COMPLETE clears the goal', $('#chatGoalBar').classList.contains('hidden'), 'goal still active');
+  // Todo rendering
+  const tturn = calls.assistantSend[calls.assistantSend.length - 1][0].turnId;
+  setVal($('#chatInput'), 'go');
+  click($('#chatSendBtn'));
+  await wait(20);
+  const t2 = calls.assistantSend[calls.assistantSend.length - 1][0].turnId;
+  fire('evt:assistant-event', { turnId: t2, event: { type: 'tool_use', name: 'TodoWrite', input: { todos: [{ content: 'Recon', status: 'completed' }, { content: 'Exploit', status: 'in_progress' }] } } });
+  await wait(5);
+  check('build: TodoWrite renders a checklist', window.document.querySelectorAll('#chatMessages .todo-item').length >= 2, 'no todo items');
+  fire('evt:assistant-event', { turnId: t2, event: { type: 'done', sessionId: 'sess-1' } });
+  await wait(5);
 
   // 10) WebSocket event → list + frames
   goto('websockets');

@@ -52,14 +52,31 @@ const assistant = new Assistant({ store, workspace: path.join(CA_DIR, 'workspace
 const chatStore = new ChatStore(); // persists to ~/.proxyaudit/chats
 
 // Let the Build agent drive the proxied Chromium to generate captured traffic.
-assistant.browse = (url) =>
-  browser.launch({
-    port: engine && engine.running ? engine.port : settings.port || 8080,
+// Start the proxy if it isn't already, so the agent's browser has something to
+// route through (otherwise the browser shows ERR_PROXY_CONNECTION_FAILED).
+async function ensureEngineRunning() {
+  if (!engine) createEngine();
+  if (!engine.running) {
+    try {
+      await engine.start();
+    } catch (_) {
+      /* port may already be served; carry on */
+    }
+  }
+  return engine;
+}
+
+// The Build agent's browser: a dedicated, CDP-controllable instance pointed at
+// the proxy's ACTUAL bound port.
+assistant.browse = async (url) => {
+  await ensureEngineRunning();
+  return browser.launchAgent({
+    port: engine.port,
     binaryPath: settings.browser,
     startUrl: url,
+    cdpPort: browser.CDP_PORT,
   });
-// CDP control so the Build agent can crawl/click pages (browser launched above
-// already exposes the remote-debugging port).
+};
 assistant.browser = new BrowserControl({
   port: browser.CDP_PORT,
   launch: (url) => assistant.browse(url),
@@ -86,6 +103,21 @@ function send(channel, payload) {
     mainWindow.webContents.send(channel, payload);
   }
 }
+
+// Resilience: a stray per-connection error (e.g. a malformed WebSocket upgrade)
+// must never crash the whole app with the Electron error dialog. Log it, tell
+// the renderer, and keep the proxy running.
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err && err.stack ? err.stack : err);
+  try {
+    send('evt:error', 'Internal error (handled): ' + (err && err.message ? err.message : String(err)));
+  } catch (_) {
+    /* ignore */
+  }
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason && reason.stack ? reason.stack : reason);
+});
 
 // Summary + in-scope flag for the renderer.
 function summaryWithScope(flow) {
@@ -410,9 +442,14 @@ function registerIpc() {
         warning = 'Proxy did not start (' + e.message + '). Opening browser anyway.';
       }
     }
-    const res = await browser.launch({
+    // Use the SAME CDP-controllable browser the Build agent drives (shared
+    // profile + remote-debugging port), so one testing browser serves both the
+    // manual "Open browser" button and the agent's crawl/navigate/click.
+    const res = await browser.launchAgent({
       port: engine.port || settings.port || 8080,
       binaryPath: opts.binaryPath || settings.browser,
+      startUrl: opts.startUrl,
+      cdpPort: browser.CDP_PORT,
     });
     if (warning && res.ok) res.warning = warning;
     return res;
