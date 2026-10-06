@@ -5,6 +5,7 @@ const os = require('os');
 const fs = require('fs');
 const { z } = require('zod');
 const { sendRequest } = require('./proxy/repeater');
+const { enumerateSubdomains } = require('./recon');
 
 /**
  * "Build" — Claude Code for security researchers.
@@ -33,13 +34,14 @@ const SYSTEM_PROMPT = `You are a WORLD-CLASS offensive-security and exploit-deve
 - mcp__proxy__crawl_site — autonomously crawl a whole site through the proxied browser: open the start URL and navigate every same-origin link (BFS, up to maxPages), so every page is loaded and all requests captured. Use this to map the full attack surface automatically.
 - mcp__proxy__browser_navigate / browser_get_links / browser_click — drive the browser page-by-page: go to a URL, read its links, and click elements (buttons/menus/"load more") to trigger JS-driven requests. You control the browser; captured traffic appears via list_flows.
 - mcp__proxy__browser_read_page — read the current page the browser is on: final URL, title, visible text, and links. Use it to see rendered/SPA content before deciding what to click or navigate.
+- mcp__proxy__enum_subdomains — enumerate a domain's subdomains (Sublist3r-style) from public CT logs (crt.sh), passively. Use it at the start of an engagement to map the full attack surface, then audit each discovered host.
 - Note: the browser you drive is either the launched proxied Chromium OR, when the ProxyAudit Chrome extension is connected, the user's own Chrome (same tools, same behaviour — you send where to go and what to do, the extension does the visiting and info-gathering). Traffic is captured either way.
 - Read/Grep/Glob/WebFetch for reference material and the workspace.
 - In AGENT MODE you also get Write/Edit/Bash/TodoWrite: write and RUN working exploit code, PoCs, fuzzers, and reports in the workspace.
 
 # How you work — be autonomous and methodical
 You are an agent: keep working until the objective is met, using tools rather than asking permission for each step. Follow a professional methodology:
-1. RECON — enumerate the attack surface. Loop list_flows (paginate/filter by host) and get_flow to understand real endpoints, auth, parameters, cookies/tokens, and technologies. Use list_js_files to review client-side code for hidden endpoints and secrets. Use open_in_browser to crawl the target and generate more traffic when coverage is thin.
+1. RECON — enumerate the attack surface. When given a domain, start with enum_subdomains to discover hosts (CT logs), then audit each authorized host: crawl_site / browser_navigate each one so its traffic is captured. Loop list_flows (paginate/filter by host) and get_flow to understand real endpoints, auth, parameters, cookies/tokens, and technologies. Use list_js_files to review client-side code for hidden endpoints and secrets. Use open_in_browser to crawl and generate more traffic when coverage is thin.
 2. VULN ANALYSIS — reason about each endpoint for concrete bug classes grounded in the evidence you captured: broken auth / session, IDOR & broken object-level authz, injection (SQLi, command, SSTI, XSS, SSRF, path traversal, XXE), access control, business-logic flaws, CSRF, open redirect, insecure deserialization, secrets/PII exposure, misconfig, and info leaks.
 3. EXPLOIT / PoC — prove it. Use send_request to tamper (swap ids, drop auth, inject payloads, replay) and confirm impact. In agent mode, write a clean, self-contained PoC/exploit script to the workspace and RUN it to demonstrate the issue end-to-end.
 4. VERIFY — confirm the finding reproduces and distinguish true positives from noise. Note preconditions.
@@ -299,11 +301,33 @@ class Assistant {
       }
     );
 
+    const enumSubdomains = tool(
+      'enum_subdomains',
+      'Enumerate subdomains of a domain (like Sublist3r) using public Certificate Transparency logs (crt.sh) — passive OSINT, no packets sent to the target. Returns the discovered hostnames. Use this to map a target\'s attack surface, then audit each host (navigate/crawl it through the browser so its traffic is captured, then review with list_flows/get_flow). Only enumerate and audit domains you are authorized to test.',
+      { domain: z.string() },
+      async (args) => {
+        const d = String(args.domain || '').trim();
+        if (!d) return txt('No domain provided.');
+        try {
+          const r = await enumerateSubdomains(d);
+          if (!r.count) return txt(`No subdomains found for ${r.domain} in CT logs.`);
+          return txt(
+            `Found ${r.count} subdomain(s) for ${r.domain} (via crt.sh):\n` +
+            r.subdomains.join('\n') +
+            `\n\nTo audit them: for each in-scope host, call browser_navigate/crawl_site (https://<host>) so its traffic is captured, then review with list_flows/get_flow/list_js_files. Enumerate & audit only what you are authorized to test.`
+          );
+        } catch (e) {
+          return txt('Subdomain enumeration failed: ' + (e.message || String(e)));
+        }
+      }
+    );
+
     this._server = createSdkMcpServer({
       name: 'proxy',
       version: '1.0.0',
       tools: [listFlows, getFlow, searchFlows, sendReq, openInBrowser, listJsFiles,
-        crawlSite, browserNavigate, browserGetLinks, browserClick, browserReadPage],
+        crawlSite, browserNavigate, browserGetLinks, browserClick, browserReadPage,
+        enumSubdomains],
     });
     return this._server;
   }
@@ -331,6 +355,7 @@ class Assistant {
       'mcp__proxy__browser_get_links',
       'mcp__proxy__browser_click',
       'mcp__proxy__browser_read_page',
+      'mcp__proxy__enum_subdomains',
     ];
     const allowedTools = proxyTools.concat(agentMode ? AGENT_TOOLS : READ_ONLY_TOOLS);
 
@@ -356,6 +381,14 @@ class Assistant {
     let newSessionId = sessionId || null;
     let authFailed = false;
     let sawTextDelta = false; // whether the current assistant message streamed text
+    // Emit exactly one 'done' no matter how the turn ends (result, error, abort,
+    // or a stream that simply stops) so the UI never stays wedged "busy".
+    let doneSent = false;
+    const emitDone = (extra) => {
+      if (doneSent) return;
+      doneSent = true;
+      onEvent({ type: 'done', sessionId: newSessionId, ...(extra || {}) });
+    };
     try {
       for await (const msg of query({ prompt: message, options })) {
         if (msg.type === 'system') {
@@ -398,9 +431,7 @@ class Assistant {
           }
         } else if (msg.type === 'result') {
           if (msg.session_id) newSessionId = msg.session_id;
-          onEvent({
-            type: 'done',
-            sessionId: newSessionId,
+          emitDone({
             cost: typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : null,
             subtype: msg.subtype,
           });
@@ -408,16 +439,20 @@ class Assistant {
       }
     } catch (e) {
       if (!authFailed && !/abort/i.test(e.message || '')) {
-        onEvent({ type: 'done', sessionId: newSessionId, error: e.message });
+        emitDone({ error: e.message });
         if (turnId) this._controllers.delete(turnId);
         return { sessionId: newSessionId, error: e.message };
       }
+    } finally {
+      if (turnId) this._controllers.delete(turnId);
     }
-    if (turnId) this._controllers.delete(turnId);
     if (authFailed) {
-      onEvent({ type: 'done', sessionId: newSessionId, error: 'Not signed in to Claude. Sign in from Settings.' });
+      emitDone({ error: 'Not signed in to Claude. Sign in from Settings.' });
       return { sessionId: newSessionId, error: 'auth' };
     }
+    // Normal completion, abort, or a stream that ended without a result message:
+    // make sure the UI is released.
+    emitDone({});
     return { sessionId: newSessionId };
   }
 

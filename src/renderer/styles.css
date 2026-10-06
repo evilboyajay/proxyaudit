@@ -426,9 +426,27 @@ thead th { box-shadow: inset 0 -1px 0 var(--line); }
   color: #5a3310; padding: 8px 12px; border-radius: 12px 12px 2px 12px; max-width: 80%;
 }
 .chat-msg.assistant { align-self: flex-start; color: var(--fg); max-width: 100%; }
-.chat-msg.assistant h3 { font-size: 14px; margin: 12px 0 4px; }
-.chat-msg.assistant ul { margin: 4px 0; padding-left: 20px; }
+/* Markdown rendering inside assistant messages */
+.chat-msg.assistant h1 { font-size: 17px; margin: 14px 0 6px; font-weight: 700; }
+.chat-msg.assistant h2 { font-size: 15px; margin: 13px 0 5px; font-weight: 700; }
+.chat-msg.assistant h3 { font-size: 14px; margin: 12px 0 4px; font-weight: 600; }
+.chat-msg.assistant h4, .chat-msg.assistant h5, .chat-msg.assistant h6 { font-size: 13px; margin: 10px 0 4px; font-weight: 600; }
+.chat-msg.assistant p { margin: 6px 0; }
+.chat-msg.assistant ul, .chat-msg.assistant ol { margin: 4px 0; padding-left: 22px; }
+.chat-msg.assistant li { margin: 2px 0; }
+.chat-msg.assistant li > ul, .chat-msg.assistant li > ol { margin: 2px 0; }
+.chat-msg.assistant a { color: var(--accent); text-decoration: underline; }
+.chat-msg.assistant strong { font-weight: 700; }
+.chat-msg.assistant em { font-style: italic; }
+.chat-msg.assistant blockquote {
+  margin: 6px 0; padding: 2px 12px; border-left: 3px solid var(--line);
+  color: var(--fg-dim);
+}
+.chat-msg.assistant hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+.chat-msg.assistant > :first-child { margin-top: 0; }
+.chat-msg.assistant > :last-child { margin-bottom: 0; }
 .chat-msg.assistant code, .chat-msg.tool code { background: var(--bg-3); padding: 1px 5px; border-radius: 4px; font-family: var(--mono); font-size: 12px; }
+.chat-msg.assistant pre.chat-code code { background: none; padding: 0; font-size: 12px; }
 .chat-msg.error { color: var(--red); }
 .chat-code {
   background: #f6f8fa; border: 1px solid var(--line); border-radius: 8px;

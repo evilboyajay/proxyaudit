@@ -711,16 +711,77 @@ const AUDIT_ALL_PROMPT =
   'prioritized, evidence-based report (flow ids + exact snippets) with reproduction steps, ' +
   'severity, and remediation. This is authorized testing.';
 
+// Render a useful subset of Markdown to safe HTML. Everything is HTML-escaped
+// first; fenced/inline code is pulled out into placeholders so its contents are
+// never treated as markup, then restored last. Block elements (headings, lists,
+// blockquotes, rules) are built line-by-line so we never inject <br> inside them.
+function chatInline(s) {
+  // s is already HTML-escaped. Order matters: code already extracted upstream.
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (m, t, u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`);
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  s = s.replace(/(^|[^_])_([^_\n]+)_/g, '$1<em>$2</em>');
+  return s;
+}
 function chatMdLite(md) {
-  let h = esc(md);
-  h = h.replace(/```[\w-]*\n?([\s\S]*?)```/g, (m, c) => `<pre class="chat-code">${c}</pre>`);
-  h = h.replace(/`([^`]+?)`/g, '<code>$1</code>');
-  h = h.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
-  h = h.replace(/^###? (.*)$/gm, '<h3>$1</h3>');
-  h = h.replace(/^\s*[-*] (.*)$/gm, '<li>$1</li>');
-  h = h.replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g, '<ul>$1</ul>');
-  h = h.replace(/\n/g, '<br>');
-  return h;
+  const codeBlocks = [];
+  const inlineCode = [];
+  // 1) Pull fenced code blocks out first (escape their contents).
+  let src = String(md == null ? '' : md).replace(/```[ \t]*([\w+-]*)\n?([\s\S]*?)```/g, (m, lang, code) => {
+    codeBlocks.push(`<pre class="chat-code"><code>${esc(code.replace(/\n$/, ''))}</code></pre>`);
+    return '\u0000CB' + (codeBlocks.length - 1) + '\u0000';
+  });
+  // 2) Pull inline code out (escape contents).
+  src = src.replace(/`([^`\n]+?)`/g, (m, c) => {
+    inlineCode.push(`<code>${esc(c)}</code>`);
+    return '\u0000IC' + (inlineCode.length - 1) + '\u0000';
+  });
+  // 3) Escape everything else, then build blocks line by line.
+  const lines = esc(src).split('\n');
+  const out = [];
+  let listType = null; // 'ul' | 'ol'
+  let para = [];
+  const closeList = () => { if (listType) { out.push('</' + listType + '>'); listType = null; } };
+  const flushPara = () => {
+    if (para.length) { out.push('<p>' + chatInline(para.join('<br>')) + '</p>'); para = []; }
+  };
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, '');
+    if (!line.trim()) { flushPara(); closeList(); continue; }
+    let m;
+    if (/^\u0000CB\d+\u0000$/.test(line.trim())) {
+      flushPara(); closeList(); out.push(line.trim());
+    } else if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
+      flushPara(); closeList();
+      const level = Math.min(m[1].length, 6);
+      out.push(`<h${level}>` + chatInline(m[2]) + `</h${level}>`);
+    } else if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
+      flushPara(); closeList(); out.push('<hr>');
+    } else if ((m = line.match(/^\s*&gt;\s?(.*)$/))) {
+      // '>' is already HTML-escaped to '&gt;' at this point.
+      flushPara(); closeList();
+      out.push('<blockquote>' + chatInline(m[1]) + '</blockquote>');
+    } else if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+      flushPara();
+      if (listType !== 'ol') { closeList(); out.push('<ol>'); listType = 'ol'; }
+      out.push('<li>' + chatInline(m[1]) + '</li>');
+    } else if ((m = line.match(/^\s*[-*+]\s+(.*)$/))) {
+      flushPara();
+      if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul'; }
+      out.push('<li>' + chatInline(m[1]) + '</li>');
+    } else {
+      closeList();
+      para.push(line);
+    }
+  }
+  flushPara(); closeList();
+  let html = out.join('\n');
+  // 4) Restore code placeholders.
+  html = html.replace(/\u0000IC(\d+)\u0000/g, (m, i) => inlineCode[+i]);
+  html = html.replace(/\u0000CB(\d+)\u0000/g, (m, i) => codeBlocks[+i]);
+  return html;
 }
 function chatAppend(cls, html) {
   const hello = $('#chatMessages .chat-hello');
@@ -843,7 +904,7 @@ async function chatLoadList() {
     del.title = 'Delete conversation';
     item.appendChild(title);
     item.appendChild(del);
-    item.addEventListener('click', () => { if (!chatCurrentTurn) chatOpen(c.id); });
+    item.addEventListener('click', () => { if (c.id !== chatActiveId) chatOpen(c.id); });
     title.addEventListener('dblclick', (e) => { e.stopPropagation(); chatBeginRename(item, c); });
     del.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -896,7 +957,9 @@ function chatRenderStored(messages) {
   }
 }
 async function chatOpen(id) {
-  if (chatCurrentTurn) return;
+  // Switching conversations stops any run in the current one (events are bound
+  // to the active view), so the user can freely move between audits.
+  if (chatCurrentTurn) { stopChat(); toast('Stopped the running response to switch chats'); }
   let rec = null;
   try { rec = await api.chatGet(id); } catch (_) {}
   if (!rec) return;
@@ -911,7 +974,7 @@ async function chatOpen(id) {
   chatLoadList();
 }
 function chatStartNew() {
-  if (chatCurrentTurn) return;
+  if (chatCurrentTurn) { stopChat(); }
   if (chatTimer) { clearInterval(chatTimer); chatTimer = null; }
   chatStatusEl = null;
   chatActiveId = null;
@@ -943,7 +1006,7 @@ const CHAT_HELP =
   '- `/clear` — start a new conversation\n' +
   '- `/stop` — stop the current run\n' +
   '- `/help` — this help\n\n' +
-  '**What I can do**: read & replay all proxied traffic (list_flows/get_flow/search_flows/send_request), review captured JS, crawl a site and click through every page (crawl_site/browser_navigate/browser_click), and — in **Agent mode** — write & run exploit/PoC code in the workspace.';
+  '**What I can do**: enumerate a domain\'s subdomains (enum_subdomains, CT logs), read & replay all proxied traffic (list_flows/get_flow/search_flows/send_request), review captured JS, crawl a site and click through every page (crawl_site/browser_navigate/browser_click/browser_read_page) — in your own Chrome when the extension is connected — and, in **Agent mode**, write & run exploit/PoC code in the workspace.';
 
 function updateGoalBar() {
   const bar = $('#chatGoalBar');
@@ -1084,6 +1147,19 @@ $('#chatAuditAllBtn').addEventListener('click', () => {
   $('#chatAgentMode').checked = true;
   sendChat(AUDIT_ALL_PROMPT);
 });
+
+if ($('#chatSubdomainsBtn')) {
+  $('#chatSubdomainsBtn').addEventListener('click', () => {
+    if (chatCurrentTurn) return;
+    const domain = (window.prompt('Enumerate subdomains for which domain? (you must be authorized to test it)') || '').trim();
+    if (!domain) return;
+    sendChat(
+      `Enumerate the subdomains of ${domain} with enum_subdomains, list what you find, then audit the discovered hosts: ` +
+      `for each one, navigate/crawl it through the browser so its traffic is captured, and review it with list_flows/get_flow/list_js_files. ` +
+      `Report findings per host with evidence, severity, and remediation. This is authorized testing of ${domain} and its subdomains.`
+    );
+  });
+}
 
 // ---- Chrome-extension control channel: use the user's own Chrome as the
 // agent's browser. The chip shows connection state; clicking it when the
