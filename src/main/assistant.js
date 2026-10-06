@@ -20,7 +20,46 @@ const { enumerateSubdomains } = require('./recon');
  */
 
 const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob', 'WebFetch'];
-const AGENT_TOOLS = ['Read', 'Grep', 'Glob', 'WebFetch', 'Write', 'Edit', 'Bash', 'TodoWrite'];
+// In agent mode the Build agent can also spawn SUBAGENTS via Task (Claude-Code
+// style fan-out), so one conversation can parallelise a large audit.
+const AGENT_TOOLS = ['Read', 'Grep', 'Glob', 'WebFetch', 'Write', 'Edit', 'Bash', 'TodoWrite', 'Task'];
+
+// Subagent types the main agent can launch with Task. They inherit the proxy
+// tools and focus on analysis (no Write/Edit/Bash — the main agent owns PoC
+// building) so several can safely run in parallel over different endpoints/hosts.
+const SUBAGENT_TOOLS = [
+  'mcp__proxy__list_flows', 'mcp__proxy__get_flow', 'mcp__proxy__search_flows',
+  'mcp__proxy__send_request', 'mcp__proxy__list_js_files', 'mcp__proxy__enum_subdomains',
+  'mcp__proxy__crawl_site', 'mcp__proxy__browser_navigate', 'mcp__proxy__browser_get_links',
+  'mcp__proxy__browser_click', 'mcp__proxy__browser_read_page', 'mcp__proxy__open_in_browser',
+  'Read', 'Grep', 'Glob', 'WebFetch',
+];
+const SUBAGENTS = {
+  'security-auditor': {
+    description:
+      'Audit a specific target slice — one endpoint, host, parameter, or JS file — for vulnerabilities and report findings with evidence (flow ids, exact snippets, repro). Launch several in parallel to cover a large attack surface quickly.',
+    tools: SUBAGENT_TOOLS,
+    prompt:
+      'You are a focused web-security auditor working as a subagent of a larger engagement. ' +
+      'Audit ONLY the slice described in your task (an endpoint, host, parameter, or JS file). ' +
+      'Use the proxy tools to read the relevant captured traffic (list_flows/get_flow/search_flows), ' +
+      'review client-side JS (list_js_files), and verify suspicions non-destructively with send_request. ' +
+      'Hunt for broken auth/session, IDOR & broken object-level authz, injection (SQLi/command/SSTI/XSS/SSRF/path traversal/XXE), ' +
+      'access-control and business-logic flaws, CSRF, open redirects, and secret/PII exposure. ' +
+      'Report a concise, evidence-based list of findings (flow id + exact snippet + severity + repro + remediation), ' +
+      'or state clearly that the slice looks clean. Authorized testing only — do not attack out-of-scope targets.',
+  },
+  'recon': {
+    description:
+      'Map a target\'s attack surface: enumerate subdomains, crawl the site through the browser to generate traffic, and summarise the endpoints/technologies discovered. Use before deep auditing.',
+    tools: SUBAGENT_TOOLS,
+    prompt:
+      'You are a reconnaissance subagent. Map the attack surface of the target you are given: ' +
+      'use enum_subdomains for subdomains (CT logs), crawl_site / browser_navigate to load pages so their traffic is captured, ' +
+      'and list_flows/list_js_files to inventory endpoints, parameters, auth mechanisms, and technologies. ' +
+      'Return a structured summary of hosts, notable endpoints, and promising areas to audit next. Authorized testing only.',
+  },
+};
 
 const SYSTEM_PROMPT = `You are a WORLD-CLASS offensive-security and exploit-development assistant embedded inside a web-security proxy (a Burp Suite alternative), working for an AUTHORIZED penetration tester. You operate ONLY against systems the tester is explicitly permitted to test; you never attack third parties, and you refuse requests that are clearly not authorized testing.
 
@@ -38,6 +77,7 @@ const SYSTEM_PROMPT = `You are a WORLD-CLASS offensive-security and exploit-deve
 - Note: the browser you drive is either the launched proxied Chromium OR, when the ProxyAudit Chrome extension is connected, the user's own Chrome (same tools, same behaviour — you send where to go and what to do, the extension does the visiting and info-gathering). Traffic is captured either way.
 - Read/Grep/Glob/WebFetch for reference material and the workspace.
 - In AGENT MODE you also get Write/Edit/Bash/TodoWrite: write and RUN working exploit code, PoCs, fuzzers, and reports in the workspace.
+- In AGENT MODE you can also fan out with the Task tool to subagents: "security-auditor" (audit one endpoint/host/param/JS file in depth) and "recon" (map a target's attack surface). Launch SEVERAL in parallel to cover a large attack surface fast, then synthesise their findings — the same way Claude Code delegates to subagents.
 
 # How you work — be autonomous and methodical
 You are an agent: keep working until the objective is met, using tools rather than asking permission for each step. Follow a professional methodology:
@@ -374,6 +414,8 @@ class Assistant {
       // so the proxy tools are always directly available (not deferred/missing).
       settingSources: [],
     };
+    // In agent mode, expose subagents the main agent can fan out to via Task.
+    if (agentMode) options.agents = SUBAGENTS;
     // A falsy model means "use the Claude Code account default".
     if (model) options.model = model;
     if (sessionId) options.resume = sessionId;

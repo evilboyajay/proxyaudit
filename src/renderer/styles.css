@@ -590,6 +590,18 @@ thead th { box-shadow: inset 0 -1px 0 var(--line); }
 }
 .chat-list-item:hover .chat-list-del { opacity: 1; }
 .chat-list-del:hover { color: var(--red); background: var(--bg); }
+/* Pulsing dot on conversations whose agent is working in the background. */
+.chat-run-dot {
+  flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%;
+  background: #16a34a; box-shadow: 0 0 0 0 rgba(22, 163, 74, .5);
+  animation: chatRunPulse 1.4s ease-out infinite;
+}
+.chat-list-item.running .chat-list-title { color: var(--fg); }
+@keyframes chatRunPulse {
+  0% { box-shadow: 0 0 0 0 rgba(22, 163, 74, .5); }
+  70% { box-shadow: 0 0 0 6px rgba(22, 163, 74, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); }
+}
 .chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
 /* ---------- Build chat: goal bar, todos, thinking ---------- */

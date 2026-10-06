@@ -437,7 +437,7 @@ function sendFlowToAI(flow, newChat) {
   if (!flow) return;
   showView('build');
   const go = () => sendChat(aiPromptForFlow(flow));
-  if (newChat) { clearGoal(); chatStartNew(); setTimeout(go, 60); }
+  if (newChat) { chatStartNew(); setTimeout(go, 60); }
   else go();
   toast('Sent to AI' + (newChat ? ' (new chat)' : ''));
 }
@@ -688,12 +688,22 @@ function renderWsFrames(conn) {
 
 // =============================== build ============================
 // Claude agent for security research — chat with proxy + filesystem tools.
-let chatSessionId = null;
+//
+// Each CONVERSATION is an independent agent that runs in the background. A
+// conversation's in-flight turn is tracked in `runs` (keyed by conversation
+// id); assistant events are routed to the right conversation by turn id and
+// persisted to the store whether or not that conversation is on screen. Only
+// the conversation currently shown (`chatActiveId`) renders live into the DOM —
+// switching away never stops a run, and switching back re-renders from the
+// store plus the run's live buffers. This is what lets many audits run at once.
+let chatSessionId = null;          // active conversation's SDK session id
 let chatTurnSeq = 0;
-let chatCurrentTurn = null;
-let chatStreamEl = null;
-let chatStreamBuf = '';
-let chatActiveId = null; // id of the persisted conversation, or null for a fresh chat
+let chatActiveId = null;           // conversation currently shown (null = fresh/unsaved)
+const runs = new Map();            // convId -> run state (see makeRun)
+const turnToConv = new Map();      // turnId -> convId (route incoming events)
+let nextGoal = null;               // goal to attach to the next run sendChat creates
+// Live DOM refs — valid ONLY for chatActiveId's run; rebuilt when switching.
+let actStreamEl = null, actThinkEl = null, actStatusEl = null, actTimer = null;
 
 const CHAT_HELLO =
   '<div class="chat-hello muted">New chat. Ask me to audit the proxy traffic, find vulns, ' +
@@ -791,8 +801,8 @@ function chatAppend(cls, html) {
   el.innerHTML = html;
   $('#chatMessages').appendChild(el);
   // Keep the live status line pinned to the bottom during a turn.
-  if (chatStatusEl && chatStatusEl.parentNode && !cls.includes('status')) {
-    $('#chatMessages').appendChild(chatStatusEl);
+  if (actStatusEl && actStatusEl.parentNode && !cls.includes('status')) {
+    $('#chatMessages').appendChild(actStatusEl);
   }
   $('#chatMessages').scrollTop = $('#chatMessages').scrollHeight;
   return el;
@@ -815,67 +825,92 @@ const WORK_WORDS = [
   'Synthesizing', 'Thinking', 'Tinkering', 'Transmuting', 'Unfurling', 'Vibing',
   'Whirring', 'Wibbling', 'Working', 'Wrangling',
 ];
-let chatTurnWord = '';
-let chatTurnStart = 0;
-let chatTimer = null;
-let chatStatusEl = null;
+function randomWord() { return WORK_WORDS[Math.floor(Math.random() * WORK_WORDS.length)]; }
+function makeRun(convId) {
+  return {
+    convId, turnId: null,
+    streamBuf: '',          // current assistant text segment (persisted at boundaries)
+    thinkBuf: '',           // current thinking text (ephemeral)
+    turnText: '',           // full assistant text this turn (for GOAL COMPLETE detection)
+    sessionId: chatSessionId,
+    model: $('#chatModel').value,
+    agentMode: $('#chatAgentMode').checked,
+    goal: null, goalIter: 0,
+    word: randomWord(), start: Date.now(), stopped: false,
+  };
+}
+function isActive(convId) { return convId != null && convId === chatActiveId; }
+function scrollMessages() { const b = $('#chatMessages'); b.scrollTop = b.scrollHeight; }
+
 function fmtElapsed(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 60) return s + 's';
   return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
 }
-function chatStatusHtml(done, stopped) {
-  const elapsed = fmtElapsed(Date.now() - chatTurnStart);
+function statusHtml(run, done, stopped) {
+  const elapsed = fmtElapsed(Date.now() - run.start);
   if (done) {
     const t = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     return stopped
-      ? `✦ ${esc(chatTurnWord)} · stopped after ${elapsed}`
-      : `✦ ${esc(chatTurnWord)} for ${elapsed} · done ${t}`;
+      ? `✦ ${esc(run.word)} · stopped after ${elapsed}`
+      : `✦ ${esc(run.word)} for ${elapsed} · done ${t}`;
   }
-  return `<span class="spinner"></span> ${esc(chatTurnWord)}…  ${elapsed}`;
+  return `<span class="spinner"></span> ${esc(run.word)}…  ${elapsed}`;
 }
-function chatStartStatus() {
-  chatTurnWord = WORK_WORDS[Math.floor(Math.random() * WORK_WORDS.length)];
-  chatTurnStart = Date.now();
-  chatStatusEl = chatAppend('status muted', chatStatusHtml(false));
-  if (chatTimer) clearInterval(chatTimer);
-  chatTimer = setInterval(() => {
-    if (chatStatusEl) chatStatusEl.innerHTML = chatStatusHtml(false);
+// Attach the live status line + ticking timer to the active view for `run`.
+function startActiveStatus(run) {
+  if (actTimer) { clearInterval(actTimer); actTimer = null; }
+  actStatusEl = chatAppend('status muted', statusHtml(run, false));
+  actTimer = setInterval(() => {
+    if (actStatusEl) actStatusEl.innerHTML = statusHtml(run, false);
+    else { clearInterval(actTimer); actTimer = null; }
   }, 1000);
 }
-function chatFinishStatus(stopped) {
-  if (chatTimer) { clearInterval(chatTimer); chatTimer = null; }
-  if (chatStatusEl) {
-    chatStatusEl.innerHTML = chatStatusHtml(true, stopped);
-    chatStatusEl.classList.add('done');
-    chatStatusEl = null; // leave it as this turn's footer
+function finishActiveStatus(run, stopped) {
+  if (actTimer) { clearInterval(actTimer); actTimer = null; }
+  if (actStatusEl) {
+    actStatusEl.innerHTML = statusHtml(run, true, stopped);
+    actStatusEl.classList.add('done');
+    actStatusEl = null;
   }
 }
-function chatCloseStream() {
-  if (chatStreamEl && !chatStreamBuf.trim()) chatStreamEl.remove();
-  chatStreamEl = null;
-  chatStreamBuf = '';
+function closeStreamActive() {
+  if (actStreamEl && actStreamEl.textContent.trim() === '') actStreamEl.remove();
+  actStreamEl = null;
 }
-function chatFlushAssistantText() {
-  if (chatActiveId && chatStreamBuf && chatStreamBuf.trim()) {
-    api.chatAppend(chatActiveId, { role: 'assistant', content: chatStreamBuf });
+function closeThinkActive(run) {
+  actThinkEl = null;
+  if (run) run.thinkBuf = '';
+}
+// Persist the current assistant text segment to the run's conversation.
+function flushSegment(run) {
+  if (run.streamBuf && run.streamBuf.trim()) {
+    api.chatAppend(run.convId, { role: 'assistant', content: run.streamBuf });
   }
+  run.streamBuf = '';
+  if (isActive(run.convId)) actStreamEl = null; // next text starts a fresh bubble
 }
 function chatSetBusy(busy) {
-  // The Send button doubles as Stop while a response is running.
+  // The Send button doubles as Stop while THIS conversation's turn runs.
   const sb = $('#chatSendBtn');
   sb.textContent = busy ? 'Stop' : 'Send';
   sb.classList.toggle('danger', busy);
   $('#chatStopBtn').disabled = !busy;
 }
+// Stop ONLY the conversation currently on screen; background runs keep going.
 function stopChat() {
-  if (chatCurrentTurn) {
-    api.assistantStop(chatCurrentTurn);
-    chatCurrentTurn = null;
-    chatSetBusy(false);
-    chatFinishStatus(true);
-  }
-  if (chatGoal) { clearGoal(); toast('Goal stopped'); }
+  const run = runs.get(chatActiveId);
+  if (!run) return;
+  api.assistantStop(run.turnId);
+  run.stopped = true;
+  run.goal = null;
+  flushSegment(run);
+  runs.delete(run.convId);
+  turnToConv.delete(run.turnId);
+  finishActiveStatus(run, true);
+  chatSetBusy(false);
+  updateGoalBar();
+  chatLoadList();
 }
 function chatClearPending() {
   const p = $('#chatMessages .chat-msg.pending');
@@ -893,15 +928,22 @@ async function chatLoadList() {
     return;
   }
   for (const c of list) {
+    const running = runs.has(c.id);
     const item = document.createElement('div');
-    item.className = 'chat-list-item' + (c.id === chatActiveId ? ' active' : '');
+    item.className = 'chat-list-item' + (c.id === chatActiveId ? ' active' : '') + (running ? ' running' : '');
+    if (running) {
+      const dot = document.createElement('span');
+      dot.className = 'chat-run-dot';
+      dot.title = 'Working in the background';
+      item.appendChild(dot);
+    }
     const title = document.createElement('span');
     title.className = 'chat-list-title';
     title.textContent = c.title || 'New chat';
     const del = document.createElement('button');
     del.className = 'chat-list-del';
     del.textContent = '×';
-    del.title = 'Delete conversation';
+    del.title = running ? 'Stop & delete conversation' : 'Delete conversation';
     item.appendChild(title);
     item.appendChild(del);
     item.addEventListener('click', () => { if (c.id !== chatActiveId) chatOpen(c.id); });
@@ -909,6 +951,9 @@ async function chatLoadList() {
     del.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (!window.confirm('Delete this conversation?')) return;
+      // Stop its background run first, if any.
+      const r = runs.get(c.id);
+      if (r) { try { api.assistantStop(r.turnId); } catch (_) {} runs.delete(c.id); turnToConv.delete(r.turnId); }
       await api.chatDelete(c.id);
       if (chatActiveId === c.id) chatStartNew();
       else chatLoadList();
@@ -956,33 +1001,49 @@ function chatRenderStored(messages) {
     }
   }
 }
+// Tear down the active view's live DOM refs (the message box is about to be
+// rebuilt). Does NOT touch any run — background turns keep streaming.
+function detachActiveView() {
+  if (actTimer) { clearInterval(actTimer); actTimer = null; }
+  actStatusEl = null; actStreamEl = null; actThinkEl = null;
+}
+// Re-create live elements for a conversation that is still running, from its
+// run buffers, so switching back shows in-progress output and the status line.
+function reattachRun(run) {
+  if (run.streamBuf && run.streamBuf.trim()) {
+    actStreamEl = chatAppend('assistant', '');
+    actStreamEl.innerHTML = chatMdLite(run.streamBuf);
+  }
+  if (run.thinkBuf) {
+    actThinkEl = chatAppend('thinking muted', '');
+    actThinkEl.textContent = '💭 ' + run.thinkBuf.slice(-4000);
+  }
+  startActiveStatus(run);
+  scrollMessages();
+}
 async function chatOpen(id) {
-  // Switching conversations stops any run in the current one (events are bound
-  // to the active view), so the user can freely move between audits.
-  if (chatCurrentTurn) { stopChat(); toast('Stopped the running response to switch chats'); }
+  // Switching conversations NEVER stops a run — it keeps going in the
+  // background. We just rebind the view to the selected conversation.
   let rec = null;
   try { rec = await api.chatGet(id); } catch (_) {}
   if (!rec) return;
-  if (chatTimer) { clearInterval(chatTimer); chatTimer = null; }
-  chatStatusEl = null;
+  detachActiveView();
   chatActiveId = id;
   chatSessionId = rec.sessionId || null;
-  chatStreamEl = null;
-  chatStreamBuf = '';
   chatRenderStored(rec.messages || []);
-  chatSetBusy(false);
+  const run = runs.get(id);
+  if (run) { chatSessionId = run.sessionId || chatSessionId; reattachRun(run); chatSetBusy(true); }
+  else chatSetBusy(false);
+  updateGoalBar();
   chatLoadList();
 }
 function chatStartNew() {
-  if (chatCurrentTurn) { stopChat(); }
-  if (chatTimer) { clearInterval(chatTimer); chatTimer = null; }
-  chatStatusEl = null;
+  detachActiveView();
   chatActiveId = null;
   chatSessionId = null;
-  chatStreamEl = null;
-  chatStreamBuf = '';
   $('#chatMessages').innerHTML = CHAT_HELLO;
   chatSetBusy(false);
+  updateGoalBar();
   chatLoadList();
 }
 async function chatEnsureActive() {
@@ -993,9 +1054,6 @@ async function chatEnsureActive() {
 }
 
 // ---- goal / slash commands (Claude-Code-style) ----
-let chatGoal = null;
-let chatGoalIter = 0;
-let chatTurnText = '';
 const CHAT_GOAL_MAX = 30;
 const CHAT_HELP =
   '**Commands**\n' +
@@ -1008,34 +1066,39 @@ const CHAT_HELP =
   '- `/help` — this help\n\n' +
   '**What I can do**: enumerate a domain\'s subdomains (enum_subdomains, CT logs), read & replay all proxied traffic (list_flows/get_flow/search_flows/send_request), review captured JS, crawl a site and click through every page (crawl_site/browser_navigate/browser_click/browser_read_page) — in your own Chrome when the extension is connected — and, in **Agent mode**, write & run exploit/PoC code in the workspace.';
 
+// The goal bar reflects the conversation currently on screen.
 function updateGoalBar() {
   const bar = $('#chatGoalBar');
-  if (chatGoal) {
-    $('#chatGoalText').textContent = `${chatGoal}  ·  iteration ${chatGoalIter}`;
+  const run = runs.get(chatActiveId);
+  if (run && run.goal) {
+    $('#chatGoalText').textContent = `${run.goal}  ·  iteration ${run.goalIter}`;
     bar.classList.remove('hidden');
   } else {
     bar.classList.add('hidden');
   }
 }
 function clearGoal() {
-  chatGoal = null;
-  chatGoalIter = 0;
+  const run = runs.get(chatActiveId);
+  if (run) run.goal = null;
   updateGoalBar();
 }
 function setGoal(text) {
-  chatGoal = text;
-  chatGoalIter = 0;
   $('#chatAgentMode').checked = true; // goals run with full autonomy
-  updateGoalBar();
+  nextGoal = text; // attached to the run sendChat is about to create
   sendChat(
     `GOAL: ${text}\n\nWork autonomously toward this goal using every tool available ` +
       '(crawl/navigate the site, read & replay captured traffic, review JS, write and run code). ' +
       'Keep going across turns. When the goal is fully achieved, reply with "GOAL COMPLETE" on its own line, then a short summary.'
   );
 }
-function goalContinue() {
-  if (!chatGoal || chatCurrentTurn) return;
-  sendChat('Continue toward the goal. If it is fully achieved, reply "GOAL COMPLETE".', true);
+// Continue a conversation's goal with a fresh background turn.
+function goalContinueRun(run) {
+  if (!run.goal || !runs.has(run.convId)) return;
+  const note = 'Continue toward the goal. If it is fully achieved, reply "GOAL COMPLETE".';
+  api.chatAppend(run.convId, { role: 'user', content: note });
+  if (isActive(run.convId)) chatAppend('goal-note muted', `↻ continuing toward goal (iteration ${run.goalIter})`);
+  launchTurn(run, note);
+  chatLoadList();
 }
 function setChatModel(arg) {
   const q = (arg || '').toLowerCase();
@@ -1055,7 +1118,7 @@ function handleSlash(raw) {
   const arg = raw.slice(1 + cmd.length).trim();
   if (cmd === 'help') { chatAppend('assistant', chatMdLite(CHAT_HELP)); return true; }
   if (cmd === 'clear') { chatStartNew(); return true; }
-  if (cmd === 'stop') { if (chatCurrentTurn) api.assistantStop(chatCurrentTurn); clearGoal(); return true; }
+  if (cmd === 'stop') { stopChat(); return true; }
   if (cmd === 'agent') {
     const on = arg ? /^(on|1|true|yes)$/i.test(arg) : !$('#chatAgentMode').checked;
     $('#chatAgentMode').checked = on;
@@ -1084,6 +1147,11 @@ function chatRenderToolUse(name, input) {
       .join('');
     return `<div class="chat-tool-name">⚙ To-dos</div><div class="chat-todos">${items}</div>`;
   }
+  if (n === 'Task') {
+    const sub = input.subagent_type || input.subagentType || 'subagent';
+    const desc = input.description || input.prompt || '';
+    return `<span class="chat-tool-name">🤖 Subagent → ${esc(sub)}</span>${desc ? ` <code>${esc(String(desc)).slice(0, 300)}</code>` : ''}`;
+  }
   let label = n;
   let detail = '';
   if (n === 'Bash') detail = '$ ' + (input.command || '');
@@ -1095,62 +1163,77 @@ function chatRenderToolUse(name, input) {
   return `<span class="chat-tool-name">⚙ ${esc(label)}</span>${detail ? ` <code>${detail}</code>` : ''}`;
 }
 
-async function sendChat(explicitMsg, isGoal) {
-  const input = $('#chatInput');
-  const typed = explicitMsg == null;
-  const msg = typed ? input.value.trim() : explicitMsg;
-  if (!msg || chatCurrentTurn) return;
-  if (typed) {
-    if (msg.startsWith('/') && handleSlash(msg)) { input.value = ''; return; }
-    input.value = '';
-  }
-  await chatEnsureActive();
-  await api.chatAppend(chatActiveId, { role: 'user', content: msg });
-  chatLoadList();
-  if (isGoal) chatAppend('goal-note muted', `↻ continuing toward goal (iteration ${chatGoalIter})`);
-  else chatAppend('user', esc(msg).replace(/\n/g, '<br>'));
-  chatCloseStream();
-  chatTurnText = '';
+// Fire a turn for `run` with the given message. Assigns a fresh turnId, routes
+// it to the run's conversation, and shows the live status if that conversation
+// is on screen (otherwise it runs silently in the background).
+function launchTurn(run, message) {
+  if (run.turnId) turnToConv.delete(run.turnId);
   chatTurnSeq += 1;
-  chatCurrentTurn = `turn-${chatTurnSeq}`;
-  chatSetBusy(true);
-  chatStartStatus();
+  run.turnId = `turn-${chatTurnSeq}`;
+  turnToConv.set(run.turnId, run.convId);
+  run.turnText = '';
+  run.streamBuf = '';
+  run.thinkBuf = '';
+  run.stopped = false;
+  run.word = randomWord();
+  run.start = Date.now();
+  if (isActive(run.convId)) { closeStreamActive(); chatSetBusy(true); startActiveStatus(run); }
   api.assistantSend({
-    turnId: chatCurrentTurn,
-    message: msg,
-    sessionId: chatSessionId,
-    model: $('#chatModel').value,
-    agentMode: $('#chatAgentMode').checked,
+    turnId: run.turnId,
+    message,
+    sessionId: run.sessionId,
+    model: run.model,
+    agentMode: run.agentMode,
   });
 }
 
+async function sendChat(explicitMsg) {
+  const input = $('#chatInput');
+  const typed = explicitMsg == null;
+  const msg = typed ? input.value.trim() : explicitMsg;
+  if (!msg) return;
+  if (typed && msg.startsWith('/') && handleSlash(msg)) { input.value = ''; return; }
+  // Don't start a second turn in a conversation that's already working.
+  if (runs.has(chatActiveId)) { toast('This chat is already working — open or create another chat to run in parallel'); return; }
+  if (typed) input.value = '';
+  const convId = await chatEnsureActive();
+  await api.chatAppend(convId, { role: 'user', content: msg });
+  chatAppend('user', esc(msg).replace(/\n/g, '<br>'));
+  const run = makeRun(convId);
+  if (nextGoal) { run.goal = nextGoal; run.goalIter = 0; nextGoal = null; }
+  runs.set(convId, run);
+  launchTurn(run, msg);
+  updateGoalBar();
+  chatLoadList();
+}
+
 $('#chatSendBtn').addEventListener('click', () => {
-  if (chatCurrentTurn) stopChat();
+  if (runs.has(chatActiveId)) stopChat();
   else sendChat();
 });
 $('#chatInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
     e.preventDefault();
-    if (!chatCurrentTurn) sendChat();
+    if (!runs.has(chatActiveId)) sendChat();
   }
-  // Esc interrupts a running response (Claude-Code-style).
-  if (e.key === 'Escape' && chatCurrentTurn) {
+  // Esc interrupts the on-screen conversation's response (Claude-Code-style).
+  if (e.key === 'Escape' && runs.has(chatActiveId)) {
     e.preventDefault();
     stopChat();
   }
 });
 $('#chatStopBtn').addEventListener('click', stopChat);
 $('#chatGoalClear').addEventListener('click', () => { clearGoal(); toast('Goal cleared'); });
-$('#chatNewBtn').addEventListener('click', () => { clearGoal(); chatStartNew(); });
+$('#chatNewBtn').addEventListener('click', () => { chatStartNew(); });
 $('#chatAuditAllBtn').addEventListener('click', () => {
-  if (chatCurrentTurn) return;
+  if (runs.has(chatActiveId)) { toast('This chat is already working — open another chat'); return; }
   $('#chatAgentMode').checked = true;
   sendChat(AUDIT_ALL_PROMPT);
 });
 
 if ($('#chatSubdomainsBtn')) {
   $('#chatSubdomainsBtn').addEventListener('click', () => {
-    if (chatCurrentTurn) return;
+    if (runs.has(chatActiveId)) { toast('This chat is already working — open another chat'); return; }
     const domain = (window.prompt('Enumerate subdomains for which domain? (you must be authorized to test it)') || '').trim();
     if (!domain) return;
     sendChat(
@@ -1202,79 +1285,91 @@ api.on('extension:status', renderExtStatus);
 refreshExtStatus();
 setInterval(refreshExtStatus, 4000);
 
-let chatThinkEl = null;
-let chatThinkBuf = '';
-function chatCloseThink() { chatThinkEl = null; chatThinkBuf = ''; }
+// Route every assistant event to the conversation whose turn produced it.
+// Persist to that conversation's store always; render to the DOM only when it
+// is the conversation currently on screen. Background turns thus keep running
+// and streaming into their own history while the user works elsewhere.
 api.on('evt:assistant-event', ({ turnId, event }) => {
-  if (turnId !== chatCurrentTurn && !(event.type === 'done')) return;
-  chatClearPending();
+  const convId = turnToConv.get(turnId);
+  if (!convId) return; // stale/stopped/unknown turn
+  const run = runs.get(convId);
+  if (!run) return;
+  const active = isActive(convId);
+  if (active) chatClearPending();
+
   if (event.type === 'text') {
-    chatCloseThink();
-    chatTurnText += event.text;
-    if (!chatStreamEl) {
-      chatStreamBuf = '';
-      chatStreamEl = chatAppend('assistant', '');
-    }
-    chatStreamBuf += event.text;
-    chatStreamEl.innerHTML = chatMdLite(chatStreamBuf);
-    $('#chatMessages').scrollTop = $('#chatMessages').scrollHeight;
-  } else if (event.type === 'tool_use') {
-    chatCloseThink();
-    chatFlushAssistantText();
-    chatCloseStream();
-    chatAppend('tool', chatRenderToolUse(event.name, event.input));
-    if (chatActiveId) {
-      api.chatAppend(chatActiveId, {
-        role: 'tool',
-        content: JSON.stringify(event.input || {}).slice(0, 2000),
-        meta: { name: event.name },
-      });
-    }
-  } else if (event.type === 'tool_result') {
-    chatCloseThink();
-    chatCloseStream();
-    chatAppend('tool-result', `<pre class="chat-code">${esc(event.text)}</pre>`);
-    if (chatActiveId) {
-      api.chatAppend(chatActiveId, { role: 'tool_result', content: (event.text || '').slice(0, 4000) });
+    run.turnText += event.text;
+    run.streamBuf += event.text;
+    if (active) {
+      closeThinkActive(run);
+      if (!actStreamEl) actStreamEl = chatAppend('assistant', '');
+      actStreamEl.innerHTML = chatMdLite(run.streamBuf);
+      scrollMessages();
     }
   } else if (event.type === 'thinking') {
     if (!event.text) return;
-    if (!chatThinkEl) { chatThinkBuf = ''; chatThinkEl = chatAppend('thinking muted', ''); }
-    chatThinkBuf += event.text;
-    chatThinkEl.textContent = '💭 ' + chatThinkBuf.slice(-4000);
-    $('#chatMessages').scrollTop = $('#chatMessages').scrollHeight;
+    run.thinkBuf += event.text;
+    if (active) {
+      if (!actThinkEl) actThinkEl = chatAppend('thinking muted', '');
+      actThinkEl.textContent = '💭 ' + run.thinkBuf.slice(-4000);
+      scrollMessages();
+    }
+  } else if (event.type === 'tool_use') {
+    flushSegment(run); // persist any assistant text before the tool call
+    api.chatAppend(convId, {
+      role: 'tool',
+      content: JSON.stringify(event.input || {}).slice(0, 2000),
+      meta: { name: event.name },
+    });
+    if (active) { closeThinkActive(run); closeStreamActive(); chatAppend('tool', chatRenderToolUse(event.name, event.input)); }
+  } else if (event.type === 'tool_result') {
+    api.chatAppend(convId, { role: 'tool_result', content: (event.text || '').slice(0, 4000) });
+    if (active) { closeThinkActive(run); closeStreamActive(); chatAppend('tool-result', `<pre class="chat-code">${esc(event.text)}</pre>`); }
   } else if (event.type === 'done') {
-    chatCloseThink();
-    chatFlushAssistantText();
-    chatCloseStream();
-    if (event.sessionId) {
-      chatSessionId = event.sessionId;
-      if (chatActiveId) api.chatSetSession(chatActiveId, chatSessionId);
-    }
-    chatCurrentTurn = null;
-    chatSetBusy(false);
-    chatFinishStatus(!!event.error);
-    if (event.error) {
-      chatAppend('assistant error', '⚠ ' + esc(event.error));
-      if (chatActiveId) api.chatAppend(chatActiveId, { role: 'assistant', content: event.error, meta: { error: true } });
-      clearGoal(); // stop the loop on error
-    } else if (chatGoal) {
-      // Autonomous goal loop: keep going until the agent declares completion.
-      if (/GOAL\s*COMPLETE/i.test(chatTurnText)) {
-        toast('🎯 Goal complete');
-        clearGoal();
-      } else if (chatGoalIter < CHAT_GOAL_MAX) {
-        chatGoalIter += 1;
-        updateGoalBar();
-        setTimeout(() => goalContinue(), 500);
-      } else {
-        toast('🎯 Goal: reached max iterations');
-        clearGoal();
-      }
-    }
-    chatLoadList();
+    finishRun(run, event);
   }
 });
+
+// Finalise a turn: persist the last text, update the session, run the goal loop,
+// and release the run (unless it continues toward a goal).
+function finishRun(run, event) {
+  const active = isActive(run.convId);
+  flushSegment(run);
+  if (event.sessionId) {
+    run.sessionId = event.sessionId;
+    api.chatSetSession(run.convId, event.sessionId);
+    if (active) chatSessionId = event.sessionId;
+  }
+  if (active) { closeThinkActive(run); finishActiveStatus(run, run.stopped); chatSetBusy(false); }
+
+  if (event.error) {
+    api.chatAppend(run.convId, { role: 'assistant', content: event.error, meta: { error: true } });
+    if (active) chatAppend('assistant error', '⚠ ' + esc(event.error));
+    run.goal = null;
+  }
+
+  let continued = false;
+  if (!event.error && run.goal) {
+    if (/GOAL\s*COMPLETE/i.test(run.turnText)) {
+      if (active) toast('🎯 Goal complete');
+      run.goal = null;
+    } else if (run.goalIter < CHAT_GOAL_MAX) {
+      run.goalIter += 1;
+      continued = true;
+      setTimeout(() => goalContinueRun(run), 500);
+    } else {
+      if (active) toast('🎯 Goal: reached max iterations');
+      run.goal = null;
+    }
+  }
+
+  if (!continued) {
+    runs.delete(run.convId);
+    turnToConv.delete(run.turnId);
+  }
+  if (active) updateGoalBar();
+  chatLoadList();
+}
 
 // ============================ settings ============================
 $('#revealCaBtn').addEventListener('click', () => api.revealCa());

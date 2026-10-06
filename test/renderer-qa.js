@@ -28,6 +28,33 @@ function rec(n, ret) {
   };
 }
 const handlers = {};
+// Minimal stateful chat store mock (for multi-chat concurrency tests).
+let chatSeq = 0;
+const chatDb = {
+  chats: new Map(),
+  create(title) {
+    const id = 'c' + (++chatSeq);
+    const r = { id, title: title || '', sessionId: null, messages: [], titled: !!title };
+    this.chats.set(id, r);
+    return { ...r };
+  },
+  get(id) { const r = this.chats.get(id); return r ? JSON.parse(JSON.stringify(r)) : null; },
+  append(id, msg) {
+    let r = this.chats.get(id);
+    if (!r) r = this.chats.get(this.create().id);
+    r.messages.push({ role: msg.role, content: String(msg.content || ''), meta: msg.meta });
+    if (!r.titled && msg.role === 'user') { r.title = String(msg.content).slice(0, 40); r.titled = true; }
+    return true;
+  },
+  setSession(id, s) { const r = this.chats.get(id); if (r) r.sessionId = s; return true; },
+  rename(id, t) { const r = this.chats.get(id); if (r) { r.title = t; r.titled = true; } return true; },
+  del(id) { this.chats.delete(id); return true; },
+  list() {
+    return Array.from(this.chats.values())
+      .map((r) => ({ id: r.id, title: r.title || 'New chat', updatedAt: 0, messageCount: r.messages.length }))
+      .reverse();
+  },
+};
 const api = {
   startProxy: rec('startProxy', { running: true, port: 8080, intercept: false, caPath: '/x/ca.pem' }),
   stopProxy: rec('stopProxy', { running: false, port: 8080 }),
@@ -110,15 +137,16 @@ const api = {
   assistantStop: rec('assistantStop', true),
   assistantWorkspace: rec('assistantWorkspace', '/Users/x/.proxyaudit/workspace'),
   listModels: rec('listModels', [{ id: 'claude-opus-5-5', label: 'Claude Opus 5.5' }, { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' }, { id: 'sonnet', label: 'sonnet' }]),
-  // Build: chat history
-  chatsList: rec('chatsList', []),
-  chatCreate: rec('chatCreate', { id: 'c1', title: 'New chat', messages: [] }),
-  chatGet: rec('chatGet', { id: 'c1', title: 'New chat', sessionId: null, messages: [] }),
-  chatRename: rec('chatRename', true),
-  chatDelete: rec('chatDelete', true),
-  chatsClear: rec('chatsClear', true),
-  chatAppend: rec('chatAppend', true),
-  chatSetSession: rec('chatSetSession', true),
+  // Build: chat history — a small stateful store so multi-chat behaviour
+  // (background runs persisting to the right conversation) can be tested.
+  chatsList: rec('chatsList', () => chatDb.list()),
+  chatCreate: rec('chatCreate', (title) => chatDb.create(title)),
+  chatGet: rec('chatGet', (id) => chatDb.get(id)),
+  chatRename: rec('chatRename', (id, title) => chatDb.rename(id, title)),
+  chatDelete: rec('chatDelete', (id) => chatDb.del(id)),
+  chatsClear: rec('chatsClear', () => { chatDb.chats.clear(); return true; }),
+  chatAppend: rec('chatAppend', (id, message) => chatDb.append(id, message)),
+  chatSetSession: rec('chatSetSession', (id, sessionId) => chatDb.setSession(id, sessionId)),
   on: (channel, handler) => { (handlers[channel] = handlers[channel] || []).push(handler); return () => {}; },
 };
 function fire(channel, payload) { (handlers[channel] || []).forEach((h) => h(payload)); }
@@ -339,6 +367,43 @@ function goto(view) {
   await wait(5);
   check('build: TodoWrite renders a checklist', window.document.querySelectorAll('#chatMessages .todo-item').length >= 2, 'no todo items');
   fire('evt:assistant-event', { turnId: t2, event: { type: 'done', sessionId: 'sess-1' } });
+  await wait(5);
+
+  // 9b) Multi-chat: conversations run concurrently in the background
+  click($('#chatNewBtn'));
+  await wait(5);
+  setVal($('#chatInput'), 'Audit chat A');
+  click($('#chatSendBtn'));
+  await wait(10);
+  const turnA = calls.assistantSend[calls.assistantSend.length - 1][0].turnId;
+  check('multichat: chat A turn is running', $('#chatSendBtn').textContent === 'Stop', 'A not busy');
+  const stopsBefore = calls.assistantStop.length;
+  // Switch to a brand-new chat B while A keeps running.
+  click($('#chatNewBtn'));
+  await wait(10);
+  check('multichat: switching away does NOT stop chat A', calls.assistantStop.length === stopsBefore, 'A was stopped on switch');
+  check('multichat: new chat B is idle', $('#chatSendBtn').textContent === 'Send', 'B shows busy');
+  check('multichat: sidebar marks A as running', window.document.querySelectorAll('#chatList .chat-run-dot').length >= 1, 'no running dot');
+  setVal($('#chatInput'), 'Audit chat B');
+  click($('#chatSendBtn'));
+  await wait(10);
+  const turnB = calls.assistantSend[calls.assistantSend.length - 1][0].turnId;
+  check('multichat: chat B starts its own turn', turnB && turnB !== turnA, 'B reused A turn');
+  // Chat A streams + finishes in the background (B is on screen).
+  fire('evt:assistant-event', { turnId: turnA, event: { type: 'text', text: 'ALPHA-FINDING' } });
+  await wait(5);
+  check('multichat: background output stays out of the active view', !/ALPHA-FINDING/.test($('#chatMessages').textContent), 'A leaked into B view');
+  fire('evt:assistant-event', { turnId: turnA, event: { type: 'done', sessionId: 'sess-A' } });
+  await wait(5);
+  // Switch back to A: its background output persisted and renders.
+  const aItem = Array.from(window.document.querySelectorAll('#chatList .chat-list-item')).find((el) => /Audit chat A/.test(el.textContent));
+  check('multichat: chat A is in the sidebar', !!aItem, 'A missing from list');
+  click(aItem);
+  await wait(10);
+  check('multichat: chat A kept its background output', /ALPHA-FINDING/.test($('#chatMessages').textContent), 'A text missing after switch');
+  check('multichat: chat A idle after its done', $('#chatSendBtn').textContent === 'Send', 'A still busy');
+  // Clean up B.
+  fire('evt:assistant-event', { turnId: turnB, event: { type: 'done', sessionId: 'sess-B' } });
   await wait(5);
 
   // 10) WebSocket event → list + frames
