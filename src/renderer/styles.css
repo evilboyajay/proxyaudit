@@ -87,6 +87,9 @@ table, .raw, .code-area, .pill, .badge { font-variant-numeric: tabular-nums; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .btn.primary:hover { background: #b85c0c; }
 .btn.sm { padding: 4px 9px; font-size: 11px; }
+/* Extension status chip — green when the ProxyAudit extension is connected. */
+#chatExtChip.ok { background: #e7f6ec; border-color: #16a34a; color: #15803d; }
+#chatExtChip.ok:hover { background: #d6f0df; }
 .input {
   background: var(--bg); color: var(--fg); border: 1px solid var(--line);
   padding: 6px 9px; border-radius: 6px; font-size: 12px; font-family: var(--ui);

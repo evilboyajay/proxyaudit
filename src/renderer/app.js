@@ -1085,6 +1085,47 @@ $('#chatAuditAllBtn').addEventListener('click', () => {
   sendChat(AUDIT_ALL_PROMPT);
 });
 
+// ---- Chrome-extension control channel: use the user's own Chrome as the
+// agent's browser. The chip shows connection state; clicking it when the
+// extension isn't connected reveals the folder to load unpacked in Chrome.
+function renderExtStatus(st) {
+  const el = $('#chatExtState');
+  const chip = $('#chatExtChip');
+  if (!el || !chip) return;
+  const connected = !!(st && st.connected);
+  el.textContent = connected ? 'connected' : 'not connected';
+  chip.classList.toggle('ok', connected);
+  chip.title = connected
+    ? 'Your Chrome is the agent\'s browser (ProxyAudit extension connected).'
+    : 'Click for setup — load the ProxyAudit extension in Chrome to let the agent drive your own browser.';
+}
+async function refreshExtStatus() {
+  try { renderExtStatus(await api.extensionStatus()); } catch (_) {}
+}
+if ($('#chatExtChip')) {
+  $('#chatExtChip').addEventListener('click', async () => {
+    let st = {};
+    try { st = await api.extensionStatus(); } catch (_) {}
+    if (st && st.connected) {
+      chatAppend('assistant muted', '🧩 The ProxyAudit extension is connected — I\'ll drive your Chrome (navigate, read pages, click) for authorized testing. Traffic is captured through the proxy.');
+      return;
+    }
+    let dir = '';
+    try { const r = await api.extensionReveal(); dir = (r && r.dir) || ''; } catch (_) {}
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    chatAppend('assistant muted',
+      '<div style="white-space:pre-wrap">🧩 Set up the ProxyAudit extension so I can use your own Chrome:\n' +
+      '1. Open chrome://extensions\n' +
+      '2. Turn on "Developer mode" (top-right)\n' +
+      '3. Click "Load unpacked" and choose:\n   ' + esc(dir || 'the ProxyAudit "extension" folder') + '\n' +
+      '4. Keep that Chrome open — the extension badge turns green when connected.\n' +
+      'Then use the extension popup\'s "Toggle proxy routing" so your browsing is captured.</div>');
+  });
+}
+api.on('extension:status', renderExtStatus);
+refreshExtStatus();
+setInterval(refreshExtStatus, 4000);
+
 let chatThinkEl = null;
 let chatThinkBuf = '';
 function chatCloseThink() { chatThinkEl = null; chatThinkBuf = ''; }

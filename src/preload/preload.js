@@ -40,6 +40,8 @@ const EVENTS = [
   'evt:plugin-changed',
   // Build: Claude agent
   'evt:assistant-event',
+  // Chrome extension bridge
+  'extension:status',
 ];
 
 contextBridge.exposeInMainWorld('api', {
@@ -110,6 +112,12 @@ contextBridge.exposeInMainWorld('api', {
   // Browser
   listBrowsers: () => ipcRenderer.invoke('browser:list'),
   openBrowser: (opts) => ipcRenderer.invoke('browser:open', opts || {}),
+
+  // Chrome extension (user's own Chrome as the agent's browser)
+  extensionStatus: () => ipcRenderer.invoke('extension:status'),
+  extensionDir: () => ipcRenderer.invoke('extension:dir'),
+  extensionReveal: () => ipcRenderer.invoke('extension:reveal'),
+  extensionSetProxyRouting: (on) => ipcRenderer.invoke('extension:setProxyRouting', on),
 
   // CA + settings
   caPath: () => ipcRenderer.invoke('ca:path'),

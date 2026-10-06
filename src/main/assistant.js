@@ -31,7 +31,9 @@ const SYSTEM_PROMPT = `You are a WORLD-CLASS offensive-security and exploit-deve
 - mcp__proxy__open_in_browser — drive the proxied Chromium to a URL so new traffic is captured (crawl, trigger flows, generate coverage), then read it with list_flows/get_flow.
 - mcp__proxy__list_js_files — list distinct JavaScript responses captured (great for source review of client-side logic, secrets, endpoints).
 - mcp__proxy__crawl_site — autonomously crawl a whole site through the proxied browser: open the start URL and navigate every same-origin link (BFS, up to maxPages), so every page is loaded and all requests captured. Use this to map the full attack surface automatically.
-- mcp__proxy__browser_navigate / browser_get_links / browser_click — drive the proxied browser page-by-page: go to a URL, read its links, and click elements (buttons/menus/"load more") to trigger JS-driven requests. You control the browser; captured traffic appears via list_flows.
+- mcp__proxy__browser_navigate / browser_get_links / browser_click — drive the browser page-by-page: go to a URL, read its links, and click elements (buttons/menus/"load more") to trigger JS-driven requests. You control the browser; captured traffic appears via list_flows.
+- mcp__proxy__browser_read_page — read the current page the browser is on: final URL, title, visible text, and links. Use it to see rendered/SPA content before deciding what to click or navigate.
+- Note: the browser you drive is either the launched proxied Chromium OR, when the ProxyAudit Chrome extension is connected, the user's own Chrome (same tools, same behaviour — you send where to go and what to do, the extension does the visiting and info-gathering). Traffic is captured either way.
 - Read/Grep/Glob/WebFetch for reference material and the workspace.
 - In AGENT MODE you also get Write/Edit/Bash/TodoWrite: write and RUN working exploit code, PoCs, fuzzers, and reports in the workspace.
 
@@ -278,11 +280,30 @@ class Assistant {
       }
     );
 
+    const browserReadPage = tool(
+      'browser_read_page',
+      'Read the page currently open in the browser: its final URL, title, visible text, and links. Use this to understand what the agent-controlled browser is actually seeing (rendered content, SPA state) before deciding what to click or navigate next. When the ProxyAudit Chrome extension is connected, this reads the user\'s real Chrome tab.',
+      { maxChars: z.number().optional() },
+      async (args) => {
+        if (!this.browser) return noBrowser();
+        try {
+          const p = await this.browser.readPage(args.maxChars || 12000);
+          if (!p) return txt('(could not read the current page)');
+          const links = (p.links || []).slice(0, 80).join('\n');
+          return txt(
+            `URL: ${p.url}\nTitle: ${p.title || ''}\n\n--- visible text ---\n${p.text || ''}\n\n--- links (${(p.links || []).length}) ---\n${links}`
+          );
+        } catch (e) {
+          return txt('Read failed: ' + (e.message || String(e)));
+        }
+      }
+    );
+
     this._server = createSdkMcpServer({
       name: 'proxy',
       version: '1.0.0',
       tools: [listFlows, getFlow, searchFlows, sendReq, openInBrowser, listJsFiles,
-        crawlSite, browserNavigate, browserGetLinks, browserClick],
+        crawlSite, browserNavigate, browserGetLinks, browserClick, browserReadPage],
     });
     return this._server;
   }
@@ -309,6 +330,7 @@ class Assistant {
       'mcp__proxy__browser_navigate',
       'mcp__proxy__browser_get_links',
       'mcp__proxy__browser_click',
+      'mcp__proxy__browser_read_page',
     ];
     const allowedTools = proxyTools.concat(agentMode ? AGENT_TOOLS : READ_ONLY_TOOLS);
 

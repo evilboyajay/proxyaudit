@@ -30,6 +30,8 @@ const { PluginHost } = require('./plugins');
 const { Assistant } = require('./assistant');
 const { ChatStore } = require('./chatstore');
 const { BrowserControl } = require('./browsercontrol');
+const { BrowserRouter } = require('./browser-router');
+const { ExtensionBridge, EXTENSION_PORT } = require('./extension-bridge');
 const models = require('./models');
 
 const CA_DIR = path.join(os.homedir(), '.proxyaudit');
@@ -66,10 +68,20 @@ async function ensureEngineRunning() {
   return engine;
 }
 
-// The Build agent's browser: a dedicated, CDP-controllable instance pointed at
-// the proxy's ACTUAL bound port.
+// The Build agent's "open in browser": if the ProxyAudit extension is connected,
+// drive the user's own Chrome (preferred); otherwise launch the dedicated,
+// CDP-controllable Chromium pointed at the proxy's ACTUAL bound port.
 assistant.browse = async (url) => {
   await ensureEngineRunning();
+  extensionBridge.setProxyPort(engine.port);
+  if (extensionBridge.isConnected()) {
+    try {
+      const r = await extensionBridge.navigate(url);
+      return { ok: true, browser: 'Chrome extension', url: r && r.url };
+    } catch (e) {
+      /* fall through to launching our own browser */
+    }
+  }
   return browser.launchAgent({
     port: engine.port,
     binaryPath: settings.browser,
@@ -77,10 +89,33 @@ assistant.browse = async (url) => {
     cdpPort: browser.CDP_PORT,
   });
 };
-assistant.browser = new BrowserControl({
+// Two browser executors behind one surface the agent uses:
+//  - the ProxyAudit Chrome extension (user's own Chrome), preferred when loaded
+//  - the launched CDP Chromium, as a fallback
+const cdpControl = new BrowserControl({
   port: browser.CDP_PORT,
   launch: (url) => assistant.browse(url),
 });
+const extensionBridge = new ExtensionBridge({ port: EXTENSION_PORT });
+assistant.browser = new BrowserRouter({ cdp: cdpControl, ext: extensionBridge });
+
+// Surface extension connection state to the renderer and keep the extension's
+// proxy port in sync with the engine's actual bound port.
+extensionBridge.on('connected', () => send('extension:status', extensionBridge.status()));
+extensionBridge.on('ready', () => send('extension:status', extensionBridge.status()));
+extensionBridge.on('disconnected', () => send('extension:status', extensionBridge.status()));
+extensionBridge.start().catch((e) => {
+  console.error('[extension-bridge] failed to start:', e && e.message);
+});
+
+// Where the unpacked Chrome extension lives on disk (a real folder the user can
+// "Load unpacked"): the repo's extension/ in dev, Contents/Resources/extension
+// in a packaged app (shipped via build.extraResources).
+function extensionDir() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'extension')
+    : path.join(__dirname, '..', '..', 'extension');
+}
 
 function loadSettings() {
   try {
@@ -161,7 +196,11 @@ function createEngine() {
     store.closeWs(connId);
     send('evt:ws-close', connId);
   });
-  engine.on('status', (state) => send('evt:status', state));
+  engine.on('status', (state) => {
+    send('evt:status', state);
+    // Keep the extension routing through the proxy's actual bound port.
+    if (engine && engine.port) extensionBridge.setProxyPort(engine.port);
+  });
   engine.on('error', (msg) => send('evt:error', msg));
 }
 
@@ -453,6 +492,24 @@ function registerIpc() {
     });
     if (warning && res.ok) res.warning = warning;
     return res;
+  });
+
+  // --------------------------- Chrome extension ---------------------------
+  // The ProxyAudit extension turns the user's own Chrome into the agent's
+  // browser: Claude build sends it where to go / what to do, it does the
+  // visiting and info-gathering and (optionally) routes through our proxy.
+  ipcMain.handle('extension:status', async () => extensionBridge.status());
+  ipcMain.handle('extension:dir', async () => extensionDir());
+  ipcMain.handle('extension:reveal', async () => {
+    const dir = extensionDir();
+    try { shell.showItemInFolder(path.join(dir, 'manifest.json')); return { ok: true, dir }; }
+    catch (e) { return { ok: false, error: e.message, dir }; }
+  });
+  ipcMain.handle('extension:setProxyRouting', async (_e, on) => {
+    extensionBridge.autoProxy = on !== false;
+    if (!engine) createEngine();
+    extensionBridge.setProxyPort(engine.port || settings.port || 8080, extensionBridge.autoProxy);
+    return extensionBridge.status();
   });
 
   // --------------------------- CA + settings ---------------------------

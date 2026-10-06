@@ -26,6 +26,12 @@
       "node_modules/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "extension",
+        "to": "extension"
+      }
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [

@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        width: 260px; margin: 0; padding: 14px;
+        background: #fff; color: #1a1a1a;
+      }
+      @media (prefers-color-scheme: dark) { body { background: #1e1e1e; color: #eee; } }
+      h1 { font-size: 14px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: #999; }
+      .dot.on { background: #16a34a; }
+      .dot.off { background: #dc2626; }
+      .row { display: flex; justify-content: space-between; margin: 6px 0; }
+      .k { color: #888; }
+      button {
+        width: 100%; margin-top: 10px; padding: 7px; border: 0; border-radius: 6px;
+        background: #2563eb; color: #fff; font-weight: 600; cursor: pointer;
+      }
+      button.secondary { background: transparent; color: #2563eb; border: 1px solid #2563eb; }
+      .hint { color: #888; font-size: 11px; margin-top: 10px; }
+    </style>
+  </head>
+  <body>
+    <h1><span id="dot" class="dot"></span> ProxyAudit Agent</h1>
+    <div class="row"><span class="k">App connection</span><span id="conn">…</span></div>
+    <div class="row"><span class="k">Proxy routing</span><span id="proxy">…</span></div>
+    <div class="row"><span class="k">Controlled tab</span><span id="tab">—</span></div>
+    <button id="reconnect" class="secondary">Reconnect to app</button>
+    <button id="toggleProxy">Toggle proxy routing</button>
+    <div class="hint">The ProxyAudit desktop app sends this extension where to go and what to do. Keep this Chrome open while the Build agent works.</div>
+    <script src="popup.js"></script>
+  </body>
+</html>
