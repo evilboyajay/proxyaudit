@@ -683,6 +683,33 @@ Requires cloudflared:  brew install cloudflared</pre>
             </div>
 
             <div class="setting">
+              <label>📱 Mobile interception</label>
+              <div class="row">
+                <label class="switch" title="Bind the proxy to all network interfaces so phones on your Wi-Fi can use it">
+                  <input type="checkbox" id="mobileLan" />
+                  <span class="slider"></span>
+                  <span class="switch-label">Allow devices on my network</span>
+                </label>
+              </div>
+              <div id="mobileSetup" class="mobile-setup hidden">
+                <p class="hint" style="margin-top:8px">On your phone, set the Wi-Fi <b>HTTP proxy</b> to this computer, then open
+                  <code>http://proxyaudit</code> in the phone's browser to install the CA.</p>
+                <div class="mobile-grid">
+                  <div><span class="muted">Proxy host</span><div id="mobileHost" class="mono"></div></div>
+                  <div><span class="muted">Proxy port</span><div id="mobilePort" class="mono"></div></div>
+                  <div><span class="muted">Install CA</span><div class="mono">http://proxyaudit</div></div>
+                </div>
+                <ol class="mobile-steps">
+                  <li><b>iOS:</b> Settings → Wi‑Fi → (your network) → Configure Proxy → <b>Manual</b> → host+port above. Then open <code>http://proxyaudit</code>, install the profile (Settings → <b>VPN &amp; Device Management</b>), then <b>Settings → General → About → Certificate Trust Settings</b> → turn it <b>ON</b>.</li>
+                  <li><b>Android:</b> Wi‑Fi → (network) → Modify → Advanced → Proxy <b>Manual</b> → host+port. Then open <code>http://proxyaudit</code> → install under <b>Encryption &amp; credentials → Install a certificate → CA certificate</b>.</li>
+                  <li>App pinning / user-CA opt-out can block some apps — a rooted device or Frida may be needed for those.</li>
+                </ol>
+                <p class="hint" id="mobileWarn"></p>
+              </div>
+              <p class="hint">Lets you intercept a phone's traffic. Your computer and phone must be on the same Wi‑Fi. Turning this on exposes the proxy to your local network.</p>
+            </div>
+
+            <div class="setting">
               <label>Keyboard shortcuts</label>
               <div id="shortcutSettings"></div>
               <div class="row" style="margin-top:8px">

@@ -1373,6 +1373,34 @@ function finishRun(run, event) {
 
 // ============================ settings ============================
 $('#revealCaBtn').addEventListener('click', () => api.revealCa());
+
+// ---- mobile interception setup ----
+async function refreshMobile() {
+  let info = null;
+  try { info = await api.mobileInfo(); } catch (_) { return; }
+  if (!info) return;
+  const box = $('#mobileSetup');
+  $('#mobileLan').checked = !!info.enabled;
+  if (info.enabled) box.classList.remove('hidden');
+  else box.classList.add('hidden');
+  const primary = (info.lan && info.lan[0] && info.lan[0].address) || 'your-computer-ip';
+  $('#mobileHost').textContent = primary;
+  $('#mobilePort').textContent = info.port;
+  // List every LAN address so the user can pick the right interface.
+  if (info.lan && info.lan.length > 1) {
+    $('#mobileHost').textContent = info.lan.map((a) => a.address).join('  /  ');
+  }
+  const warn = $('#mobileWarn');
+  if (info.enabled && !info.running) warn.textContent = '⚠ Start the proxy for devices to connect.';
+  else if (info.enabled && info.boundHost !== '0.0.0.0') warn.textContent = '⚠ Restart the proxy to bind to the network.';
+  else warn.textContent = '';
+}
+$('#mobileLan').addEventListener('change', async (e) => {
+  const on = e.target.checked;
+  await api.mobileSetLan(on);
+  toast(on ? 'Proxy now reachable on your network' : 'Proxy restricted to this computer');
+  await refreshMobile();
+});
 $('#setPort').addEventListener('change', async (e) => {
   await api.setSettings({ port: Number(e.target.value) });
   toast('Port saved — restart the proxy to apply');
@@ -2647,5 +2675,6 @@ window.addEventListener('keydown', async (e) => {
   const ws = await api.assistantWorkspace();
   $('#chatWorkspace').textContent = 'workspace: ' + ws;
   await chatLoadList();
+  await refreshMobile();
 })();
 })(); // end app IIFE

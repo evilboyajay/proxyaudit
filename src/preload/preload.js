@@ -119,6 +119,10 @@ contextBridge.exposeInMainWorld('api', {
   extensionReveal: () => ipcRenderer.invoke('extension:reveal'),
   extensionSetProxyRouting: (on) => ipcRenderer.invoke('extension:setProxyRouting', on),
 
+  // Mobile interception (intercept a phone's traffic over the LAN)
+  mobileInfo: () => ipcRenderer.invoke('mobile:info'),
+  mobileSetLan: (on) => ipcRenderer.invoke('mobile:setLan', on),
+
   // CA + settings
   caPath: () => ipcRenderer.invoke('ca:path'),
   revealCa: () => ipcRenderer.invoke('ca:reveal'),

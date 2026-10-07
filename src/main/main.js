@@ -164,6 +164,8 @@ function createEngine() {
     port: settings.port || 8080,
     caDir: CA_DIR,
     matchreplace: matchReplace,
+    // Bind to all interfaces when the user has enabled device/mobile access.
+    host: settings.mobileLan ? '0.0.0.0' : '127.0.0.1',
   });
 
   engine.on('flow', (flow) => {
@@ -510,6 +512,44 @@ function registerIpc() {
     if (!engine) createEngine();
     extensionBridge.setProxyPort(engine.port || settings.port || 8080, extensionBridge.autoProxy);
     return extensionBridge.status();
+  });
+
+  // --------------------------- Mobile interception ---------------------------
+  // Intercept a phone's traffic: bind the proxy to the LAN, point the phone's
+  // Wi-Fi proxy at this machine, and install the CA via http://proxyaudit.
+  function lanAddresses() {
+    const out = [];
+    const ifaces = os.networkInterfaces();
+    for (const name of Object.keys(ifaces)) {
+      for (const ni of ifaces[name] || []) {
+        if (ni.family === 'IPv4' && !ni.internal) out.push({ iface: name, address: ni.address });
+      }
+    }
+    return out;
+  }
+  function mobileInfo() {
+    const port = (engine && engine.port) || settings.port || 8080;
+    return {
+      enabled: !!settings.mobileLan,
+      running: !!(engine && engine.running),
+      boundHost: engine ? engine.host : (settings.mobileLan ? '0.0.0.0' : '127.0.0.1'),
+      port,
+      lan: lanAddresses(),
+      certHosts: ['proxyaudit', 'mitm.it', 'burp'],
+    };
+  }
+  ipcMain.handle('mobile:info', async () => mobileInfo());
+  ipcMain.handle('mobile:setLan', async (_e, on) => {
+    settings.mobileLan = !!on;
+    saveSettings();
+    // Re-bind the proxy on the new interface if it is running.
+    if (engine) {
+      const wasRunning = engine.running;
+      try { await engine.stop(); } catch (_) {}
+      engine.setHost(settings.mobileLan ? '0.0.0.0' : '127.0.0.1');
+      if (wasRunning) { try { await engine.start(); } catch (e) { send('evt:error', 'Could not rebind proxy: ' + e.message); } }
+    }
+    return mobileInfo();
   });
 
   // --------------------------- CA + settings ---------------------------

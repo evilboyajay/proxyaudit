@@ -87,6 +87,13 @@ table, .raw, .code-area, .pill, .badge { font-variant-numeric: tabular-nums; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .btn.primary:hover { background: #b85c0c; }
 .btn.sm { padding: 4px 9px; font-size: 11px; }
+/* Mobile interception setup block */
+.mobile-setup { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 8px 0; background: var(--bg-2); }
+.mobile-grid { display: flex; gap: 22px; flex-wrap: wrap; margin: 8px 0 10px; }
+.mobile-grid .muted { font-size: 11px; display: block; }
+.mobile-grid .mono { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--accent-2); }
+.mobile-steps { margin: 6px 0 0; padding-left: 20px; font-size: 12.5px; color: var(--fg-dim); }
+.mobile-steps li { margin: 5px 0; }
 /* Extension status chip — green when the ProxyAudit extension is connected. */
 #chatExtChip.ok { background: #e7f6ec; border-color: #16a34a; color: #15803d; }
 #chatExtChip.ok:hover { background: #d6f0df; }

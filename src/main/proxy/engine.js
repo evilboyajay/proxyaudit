@@ -47,6 +47,10 @@ class ProxyEngine extends EventEmitter {
   constructor(options = {}) {
     super();
     this.port = options.port || 8080;
+    // Interface to bind. '127.0.0.1' = this machine only (default, safest);
+    // '0.0.0.0' = all interfaces, so phones/other devices on the LAN can use
+    // this proxy (needed to intercept mobile-app traffic).
+    this.host = options.host || '127.0.0.1';
     this.caDir = options.caDir || path.join(os.homedir(), '.proxyaudit');
     this.proxy = null;
     this.running = false;
@@ -72,6 +76,75 @@ class ProxyEngine extends EventEmitter {
     return path.join(this.caDir, 'certs', 'ca.pem');
   }
 
+  /** The CA certificate as PEM text. */
+  caPem() {
+    return fs.readFileSync(this.caPath(), 'utf8');
+  }
+
+  /** The CA certificate as DER bytes (what iOS/Android cert installers want). */
+  caDer() {
+    const pem = this.caPem();
+    const m = pem.match(/-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/);
+    if (!m) throw new Error('CA certificate not found');
+    return Buffer.from(m[1].replace(/\s+/g, ''), 'base64');
+  }
+
+  setHost(host) {
+    this.host = host || '127.0.0.1';
+  }
+
+  /**
+   * Burp/mitmproxy-style cert delivery: when a PROXIED client browses to a
+   * magic host (http://proxyaudit, http://mitm.it, http://burp), serve a small
+   * landing page and the CA certificate so a phone can install it in two taps.
+   * Returns true if the request was handled here (do not forward/record).
+   */
+  _maybeServeCert(ctx) {
+    if (ctx.isSSL) return false; // only over plain http
+    const creq = ctx.clientToProxyRequest;
+    const host = String(creq.headers.host || '').split(':')[0].toLowerCase();
+    if (host !== 'proxyaudit' && host !== 'mitm.it' && host !== 'burp') return false;
+    const urlPath = String(creq.url || '/').split('?')[0];
+    const res = ctx.proxyToClientResponse;
+
+    const wantsCert = /^\/(cert|ca|ca\.crt|ca\.pem|proxyaudit\.crt|proxyaudit-ca\.crt)$/i.test(urlPath);
+    if (wantsCert) {
+      try {
+        const der = this.caDer();
+        res.writeHead(200, {
+          'Content-Type': 'application/x-x509-ca-cert',
+          'Content-Disposition': 'attachment; filename="proxyaudit-ca.crt"',
+          'Content-Length': der.length,
+          Connection: 'close',
+        });
+        res.end(der);
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('CA not available yet: ' + e.message);
+      }
+      return true;
+    }
+
+    // Landing page.
+    const body =
+      '<!doctype html><meta charset="utf-8">' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+      '<title>ProxyAudit — install CA</title>' +
+      '<style>body{font:16px/1.5 -apple-system,system-ui,sans-serif;margin:0;padding:24px;color:#111}' +
+      'h1{font-size:20px}a.btn{display:inline-block;margin:14px 0;padding:12px 18px;background:#c96a16;color:#fff;' +
+      'border-radius:10px;text-decoration:none;font-weight:600}ol{padding-left:20px}code{background:#eee;padding:1px 5px;border-radius:4px}</style>' +
+      '<h1>ProxyAudit CA certificate</h1>' +
+      '<p>Your device is routing through ProxyAudit. Install this certificate to intercept HTTPS.</p>' +
+      '<p><a class="btn" href="/cert">⬇ Download CA certificate</a></p>' +
+      '<p><b>iOS:</b> install the profile, then <b>Settings → General → VPN &amp; Device Management</b> to install it, ' +
+      'then <b>Settings → General → About → Certificate Trust Settings</b> and turn it <b>ON</b>.</p>' +
+      '<p><b>Android:</b> Settings → Security → <b>Encryption &amp; credentials → Install a certificate → CA certificate</b>. ' +
+      'Note: modern apps only trust <i>user</i> CAs if they opt in; a rooted device or Frida may be needed for some apps.</p>';
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', Connection: 'close' });
+    res.end(body);
+    return true;
+  }
+
   async start() {
     if (this.running) return;
     fs.mkdirSync(this.caDir, { recursive: true });
@@ -92,7 +165,7 @@ class ProxyEngine extends EventEmitter {
 
     await new Promise((resolve, reject) => {
       this.proxy.listen(
-        { port: this.port, host: '127.0.0.1', sslCaDir: this.caDir },
+        { port: this.port, host: this.host, sslCaDir: this.caDir },
         (err) => {
           if (err) {
             this.emit('error', `Failed to start proxy: ${err.message}`);
@@ -223,6 +296,8 @@ class ProxyEngine extends EventEmitter {
   }
 
   _onRequest(ctx, callback) {
+    // Serve the CA cert to a proxied phone (http://proxyaudit) and stop.
+    if (this._maybeServeCert(ctx)) return;
     const creq = ctx.clientToProxyRequest;
     const isSSL = ctx.isSSL;
     const host = creq.headers.host || ctx.proxyToServerRequestOptions?.host || '';
