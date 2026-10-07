@@ -148,8 +148,8 @@ const api = {
   chatAppend: rec('chatAppend', (id, message) => chatDb.append(id, message)),
   chatSetSession: rec('chatSetSession', (id, sessionId) => chatDb.setSession(id, sessionId)),
   // Mobile interception
-  mobileInfo: rec('mobileInfo', { enabled: false, running: false, boundHost: '127.0.0.1', port: 8080, lan: [{ iface: 'en0', address: '192.168.1.42' }], certHosts: ['proxyaudit'] }),
-  mobileSetLan: rec('mobileSetLan', { enabled: true, running: true, boundHost: '0.0.0.0', port: 8080, lan: [{ iface: 'en0', address: '192.168.1.42' }], certHosts: ['proxyaudit'] }),
+  mobileInfo: rec('mobileInfo', { enabled: false, running: false, boundHost: '127.0.0.1', port: 8080, lan: [{ iface: 'en0', address: '192.168.1.42' }], certHosts: ['proxyaudit'], certPort: null }),
+  mobileSetLan: rec('mobileSetLan', { enabled: true, running: true, boundHost: '0.0.0.0', port: 8080, lan: [{ iface: 'en0', address: '192.168.1.42' }], certHosts: ['proxyaudit'], certPort: 8099 }),
   on: (channel, handler) => { (handlers[channel] = handlers[channel] || []).push(handler); return () => {}; },
 };
 function fire(channel, payload) { (handlers[channel] || []).forEach((h) => h(payload)); }

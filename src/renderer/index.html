@@ -697,8 +697,9 @@ Requires cloudflared:  brew install cloudflared</pre>
                 <div class="mobile-grid">
                   <div><span class="muted">Proxy host</span><div id="mobileHost" class="mono"></div></div>
                   <div><span class="muted">Proxy port</span><div id="mobilePort" class="mono"></div></div>
-                  <div><span class="muted">Install CA</span><div class="mono">http://proxyaudit</div></div>
                 </div>
+                <p class="hint" style="margin:4px 0 0"><b>Install the CA — open this on the phone's browser:</b></p>
+                <div class="mono" id="mobileCertUrl" style="font-size:15px;color:var(--accent-2);margin:4px 0 8px">http://proxyaudit</div>
                 <ol class="mobile-steps">
                   <li><b>iOS:</b> Settings → Wi‑Fi → (your network) → Configure Proxy → <b>Manual</b> → host+port above. Then open <code>http://proxyaudit</code>, install the profile (Settings → <b>VPN &amp; Device Management</b>), then <b>Settings → General → About → Certificate Trust Settings</b> → turn it <b>ON</b>.</li>
                   <li><b>Android:</b> Wi‑Fi → (network) → Modify → Advanced → Proxy <b>Manual</b> → host+port. Then open <code>http://proxyaudit</code> → install under <b>Encryption &amp; credentials → Install a certificate → CA certificate</b>.</li>

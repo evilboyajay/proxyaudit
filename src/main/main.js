@@ -32,6 +32,7 @@ const { ChatStore } = require('./chatstore');
 const { BrowserControl } = require('./browsercontrol');
 const { BrowserRouter } = require('./browser-router');
 const { ExtensionBridge, EXTENSION_PORT } = require('./extension-bridge');
+const { CertServer } = require('./certserver');
 const models = require('./models');
 
 const CA_DIR = path.join(os.homedir(), '.proxyaudit');
@@ -98,6 +99,12 @@ const cdpControl = new BrowserControl({
 });
 const extensionBridge = new ExtensionBridge({ port: EXTENSION_PORT });
 assistant.browser = new BrowserRouter({ cdp: cdpControl, ext: extensionBridge });
+
+// Standalone LAN server that hands the CA cert to phones (no proxy required).
+const certServer = new CertServer({
+  caPath: () => path.join(CA_DIR, 'certs', 'ca.pem'),
+  port: 8099,
+});
 
 // Surface extension connection state to the renderer and keep the extension's
 // proxy port in sync with the engine's actual bound port.
@@ -536,6 +543,7 @@ function registerIpc() {
       port,
       lan: lanAddresses(),
       certHosts: ['proxyaudit', 'mitm.it', 'burp'],
+      certPort: certServer.port, // direct cert-download server (null if off)
     };
   }
   ipcMain.handle('mobile:info', async () => mobileInfo());
@@ -548,6 +556,12 @@ function registerIpc() {
       try { await engine.stop(); } catch (_) {}
       engine.setHost(settings.mobileLan ? '0.0.0.0' : '127.0.0.1');
       if (wasRunning) { try { await engine.start(); } catch (e) { send('evt:error', 'Could not rebind proxy: ' + e.message); } }
+    }
+    // Start/stop the standalone LAN cert server.
+    if (settings.mobileLan) {
+      try { await certServer.start('0.0.0.0'); } catch (e) { send('evt:error', 'Cert server failed: ' + e.message); }
+    } else {
+      await certServer.stop();
     }
     return mobileInfo();
   });
@@ -688,6 +702,10 @@ app.whenReady().then(() => {
   registerIpc();
   buildMenu();
   createWindow();
+  // If device/mobile access was left on, bring the LAN cert server back up.
+  if (settings.mobileLan) {
+    certServer.start('0.0.0.0').catch((e) => console.error('[certserver]', e && e.message));
+  }
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

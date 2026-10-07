@@ -1390,6 +1390,14 @@ async function refreshMobile() {
   if (info.lan && info.lan.length > 1) {
     $('#mobileHost').textContent = info.lan.map((a) => a.address).join('  /  ');
   }
+  // Prefer the direct cert server (works even before the proxy is set up);
+  // fall back to the proxied magic host.
+  const certEl = $('#mobileCertUrl');
+  if (certEl) {
+    certEl.textContent = info.certPort
+      ? `http://${primary}:${info.certPort}`
+      : 'http://proxyaudit  (set the Wi‑Fi proxy first)';
+  }
   const warn = $('#mobileWarn');
   if (info.enabled && !info.running) warn.textContent = '⚠ Start the proxy for devices to connect.';
   else if (info.enabled && info.boundHost !== '0.0.0.0') warn.textContent = '⚠ Restart the proxy to bind to the network.';
