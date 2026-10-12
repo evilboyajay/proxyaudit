@@ -4,9 +4,13 @@ Thanks for helping out! Bug reports, features, plugins and docs are all welcome.
 
 ## Getting started
 
+You need Node.js 24 LTS or newer. With [nvm](https://github.com/nvm-sh/nvm),
+`nvm use` picks the right version from `.nvmrc`.
+
 ```bash
 git clone https://github.com/<you>/proxyaudit.git
 cd proxyaudit
+nvm use
 npm install
 npm start        # or: npm run dev
 ```

@@ -9,7 +9,7 @@ Intercept, replay, fuzz and audit HTTP/HTTPS and WebSocket traffic, then let an 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Electron](https://img.shields.io/badge/built%20with-Electron-47848F)
-![Node 18+](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
+![Node 24+](https://img.shields.io/badge/node-%3E%3D24-brightgreen)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 <img src="docs/proxyaudit-demo.gif" alt="ProxyAudit demo: capture traffic, find an IDOR in Repeater, catch a blind SSRF with Collaborator, and let the Claude agent write and run a PoC" width="900">
@@ -112,7 +112,7 @@ additional tooling such as Frida.
 
 **Requirements**
 
-- macOS, Node.js 18+
+- macOS, Node.js 24 LTS or newer (`nvm use` picks it up from `.nvmrc`)
 - For AI features: the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
   logged in once with `claude login` (or `ANTHROPIC_API_KEY` set)
 - Optional: `cloudflared` for Collaborator (`brew install cloudflared`)
@@ -123,6 +123,7 @@ additional tooling such as Frida.
 ```bash
 git clone https://github.com/evilboyajay/proxyaudit.git
 cd proxyaudit
+nvm use          # optional: switches to Node 24 from .nvmrc
 npm install
 npm start
 ```
@@ -227,7 +228,7 @@ Ideas for contributors. Open an issue before starting large work.
 Contributions are welcome: bug reports, features, plugins and docs.
 
 1. Fork the repo and create a branch: `git checkout -b feat/my-feature`
-2. `npm install && npm start` to run locally
+2. `nvm use && npm install && npm start` to run locally (Node 24+)
 3. Run the QA suite: `npm run qa`
 4. Open a pull request describing what changed and why
 
