@@ -11,7 +11,7 @@
  */
 
 const EXPORT_VERSION = 1;
-const APP_NAME = 'burp-alt';
+const APP_NAME = 'proxyaudit';
 
 // ----------------------------- helpers -----------------------------
 

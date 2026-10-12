@@ -1,9 +1,9 @@
 {
-  "name": "burp-alt",
+  "name": "proxyaudit",
   "productName": "ProxyAudit",
   "version": "0.1.0",
   "description": "An open-source web security testing proxy with a Claude-powered endpoint & JS auditor.",
-  "author": "user@example.com",
+  "author": "evilboyajay (https://github.com/evilboyajay)",
   "license": "MIT",
   "main": "src/main/main.js",
   "scripts": {
