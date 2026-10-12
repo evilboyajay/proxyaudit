@@ -12,6 +12,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "predist": "node build/sdk-binaries.js",
     "dist": "electron-builder --mac",
     "pack": "electron-builder --dir",
     "qa": "node test/renderer-qa.js"
@@ -23,6 +24,7 @@
       "output": "dist",
       "buildResources": "build"
     },
+    "afterPack": "build/afterPack.js",
     "files": [
       "src/**/*",
       "assets/**/*",
@@ -47,6 +49,7 @@
         }
       ],
       "icon": "build/icon.icns",
+      "identity": "-",
       "hardenedRuntime": false,
       "gatekeeperAssess": false
     }
@@ -63,5 +66,9 @@
     "electron": "^44.0.0",
     "electron-builder": "^26.0.0",
     "jsdom": "^29.1.1"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.289",
+    "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.289"
   }
 }

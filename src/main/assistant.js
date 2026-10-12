@@ -6,6 +6,7 @@ const fs = require('fs');
 const { z } = require('zod');
 const { sendRequest } = require('./proxy/repeater');
 const { enumerateSubdomains } = require('./recon');
+const { claudeExecutable } = require('./sdkpath');
 
 /**
  * "Build" — Claude Code for security researchers.
@@ -407,6 +408,7 @@ class Assistant {
       allowDangerouslySkipPermissions: true,
       cwd: this.workspace,
       env: sdkEnv(),
+      pathToClaudeCodeExecutable: claudeExecutable(),
       abortController: controller,
       includePartialMessages: true, // stream text/thinking live, not just at the end
       // Don't load the user's global Claude Code settings/MCP servers (e.g.

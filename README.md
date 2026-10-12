@@ -16,7 +16,7 @@ Intercept, replay, fuzz and audit HTTP/HTTPS and WebSocket traffic, then let an 
 
 <sub>100-second tour · [full-quality MP4](docs/proxyaudit-demo.mp4)</sub>
 
-[Features](#features) · [Quick start](#quick-start) · [AI agent](#ai-security-agent) · [Mobile testing](#mobile-app-interception-ios--android) · [Contributing](#contributing)
+[Download](https://github.com/evilboyajay/proxyaudit/releases/latest) · [Features](#features) · [Quick start](#quick-start) · [AI agent](#ai-security-agent) · [Mobile testing](#mobile-app-interception-ios--android) · [Contributing](#contributing)
 
 </div>
 
@@ -109,6 +109,21 @@ Per-OS steps are in the app. Apps that use certificate pinning may need
 additional tooling such as Frida.
 
 ## Quick start
+
+### Download the app
+
+Get the latest `.dmg` from
+[**Releases**](https://github.com/evilboyajay/proxyaudit/releases/latest):
+
+- **Apple Silicon (M1 and later):** `ProxyAudit-<version>-arm64.dmg`
+- **Intel:** `ProxyAudit-<version>.dmg`
+
+Open the DMG and drag **ProxyAudit** to Applications. The app isn't notarized
+by Apple yet, so the first launch is blocked: open **System Settings → Privacy
+& Security** and click **Open Anyway**, or run
+`xattr -dr com.apple.quarantine /Applications/ProxyAudit.app`.
+
+### Run from source
 
 **Requirements**
 

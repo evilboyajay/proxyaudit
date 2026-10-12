@@ -11,6 +11,8 @@
  * The SDK is ESM-only; this CommonJS module loads it via dynamic import().
  */
 
+const { claudeExecutable } = require('../sdkpath');
+
 let _sdk = null;
 async function getSdk() {
   if (!_sdk) _sdk = await import('@anthropic-ai/claude-agent-sdk');
@@ -113,6 +115,7 @@ async function runAudit({ prompt, model, onDelta }) {
     maxTurns: 1,
     abortController: controller,
     env: sdkEnv(),
+    pathToClaudeCodeExecutable: claudeExecutable(),
   };
   if (model) options.model = model; // falsy => account default
 
@@ -180,7 +183,7 @@ async function checkAuth() {
     try {
       for await (const msg of query({
         prompt: 'Reply with the single word: OK',
-        options: { model: 'haiku', allowedTools: [], maxTurns: 1, abortController: controller, env: sdkEnv() },
+        options: { model: 'haiku', allowedTools: [], maxTurns: 1, abortController: controller, env: sdkEnv(), pathToClaudeCodeExecutable: claudeExecutable() },
       })) {
         if (msg.type === 'system' && msg.subtype === 'api_retry') {
           if (msg.error_status === 401 || /auth/i.test(msg.error || '')) {
