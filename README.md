@@ -12,6 +12,10 @@ Intercept, replay, fuzz and audit HTTP/HTTPS and WebSocket traffic, then let an 
 ![Node 18+](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
+<img src="docs/proxyaudit-demo.gif" alt="ProxyAudit demo: capture traffic, find an IDOR in Repeater, catch a blind SSRF with Collaborator, and let the Claude agent write and run a PoC" width="900">
+
+<sub>100-second tour · [full-quality MP4](docs/proxyaudit-demo.mp4)</sub>
+
 [Features](#features) · [Quick start](#quick-start) · [AI agent](#ai-security-agent) · [Mobile testing](#mobile-app-interception-ios--android) · [Contributing](#contributing)
 
 </div>
@@ -128,11 +132,39 @@ npm start
 1. Click **Start proxy** (default `127.0.0.1:8080`).
 2. The easiest route is **Open browser**, which launches a pre-configured
    browser. Nothing else is needed.
-3. To use your own browser or system proxy instead, trust the CA:
-   Settings → **Reveal in Finder** → double-click `ca.pem` → add it to the
-   *login* keychain → set **Always Trust**. Then point HTTP and HTTPS proxy to
-   `127.0.0.1:8080`.
+3. To use your own browser or system proxy instead, [install the CA
+   certificate](#installing-the-ca-certificate), then point HTTP and HTTPS
+   proxy to `127.0.0.1:8080`.
 4. Browse your target. Traffic appears under **Proxy**.
+
+### Installing the CA certificate
+
+To read HTTPS traffic, ProxyAudit signs certificates with its own CA. The CA is
+generated on first start and is unique to your machine; it is never shipped in
+this repo.
+
+- **Location:** `~/.proxyaudit/certs/ca.pem` (Settings → **Reveal in Finder**,
+  or menu **Proxy → Reveal CA Certificate**).
+- **macOS (GUI):** double-click `ca.pem`, add it to the *login* keychain, open
+  it in Keychain Access and set **Trust → When using this certificate → Always
+  Trust**.
+- **macOS (terminal):**
+
+  ```bash
+  security add-trusted-cert -r trustRoot \
+    -k ~/Library/Keychains/login.keychain-db ~/.proxyaudit/certs/ca.pem
+  ```
+
+- **Firefox** keeps its own store: Settings → Privacy & Security →
+  Certificates → **View Certificates** → **Import** `ca.pem` and tick *Trust
+  this CA to identify websites*.
+- **iOS / Android:** see [Mobile app interception](#mobile-app-interception-ios--android).
+- **Not needed** when you use **Open browser**.
+
+> 🔒 Anyone holding your CA's private key could intercept traffic from your
+> machine. Never share `~/.proxyaudit/certs`, and remove the certificate from
+> Keychain Access when you stop testing. To regenerate it, delete
+> `~/.proxyaudit/certs` and restart ProxyAudit.
 
 ## Keyboard shortcuts
 
