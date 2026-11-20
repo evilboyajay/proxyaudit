@@ -69,6 +69,7 @@ const api = {
     response: { status: 200, statusMessage: 'OK', headers: { 'content-type': 'text/html' }, body: '<html>ok</html>', mime: 'text/html', length: 15 },
   }),
   clearFlows: rec('clearFlows', true),
+  deleteFlows: rec('deleteFlows', 1),
   listWs: rec('listWs', []),
   getWs: rec('getWs', { id: 'w1', url: 'wss://ex.com/s', host: 'ex.com', closed: false,
     messages: [{ ts: Date.now(), direction: 'outgoing', binary: false, length: 5, data: 'hello' }] }),
@@ -632,6 +633,38 @@ function goto(view) {
   click($('#authLogoutBtn'));
   await wait(10);
   check('auth: sign out calls authLogout', calls.authLogout.length >= 1, 'authLogout not called');
+
+  // 22b) HTTP history multi-select: ⌘A selects all rows, Delete/right-click acts on the selection
+  goto('proxy');
+  ['ma', 'mb', 'mc', 'md'].forEach((id, i) => fire('evt:flow-update', { id, method: 'GET', scheme: 'https', host: 'multi.com', path: '/' + i, url: 'https://multi.com/' + i, status: 200, mime: 'text/html', length: 1 }));
+  await wait(10);
+  const rowsNow = () => Array.from(window.document.querySelectorAll('#flowBody tr'));
+  const rowById = (id) => window.document.querySelector(`#flowBody tr[data-id="${id}"]`);
+  const mdown = (el) => el.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }));
+  mdown(rowById('ma')); click(rowById('ma'));
+  await wait(5);
+  // a real click on a (non-focusable) row moves focus off any text field; jsdom doesn't
+  if (window.document.activeElement && window.document.activeElement.blur) window.document.activeElement.blur();
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'a', metaKey: true, bubbles: true, cancelable: true }));
+  await wait(5);
+  check('proxy: ⌘A selects every visible row', rowsNow().length > 1 && rowsNow().every((r) => r.classList.contains('selected')), rowsNow().filter((r) => !r.classList.contains('selected')).length + ' unselected');
+  mdown(rowById('mb')); click(rowById('mb'));
+  rowById('md').dispatchEvent(new window.MouseEvent('click', { bubbles: true, metaKey: true }));
+  await wait(5);
+  check('proxy: ⌘+click adds to selection', rowById('mb').classList.contains('selected') && rowById('md').classList.contains('selected') && !rowById('mc').classList.contains('selected'), 'sel=' + rowsNow().filter((r) => r.classList.contains('selected')).map((r) => r.dataset.id));
+  rowById('md').dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+  await wait(5);
+  const bulkMenu = window.document.querySelector('.ctx-menu');
+  const delItem = bulkMenu && Array.from(bulkMenu.querySelectorAll('.ctx-item')).find((x) => /Delete 2 selected items/.test(x.textContent));
+  check('proxy: right-click on selection offers bulk delete + clear', !!delItem && /Clear history/.test(bulkMenu.textContent), bulkMenu ? bulkMenu.textContent : 'no menu');
+  if (delItem) delItem.click();
+  await wait(10);
+  check('proxy: bulk delete removes rows + calls main store', !rowById('mb') && !rowById('md') && !!rowById('mc') && calls.deleteFlows.length >= 1 && calls.deleteFlows.at(-1)[0].length === 2, 'mb/md still present or deleteFlows not called');
+  mdown(rowById('mc')); click(rowById('mc'));
+  await wait(5);
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }));
+  await wait(10);
+  check('proxy: Delete/Backspace removes selected row', !rowById('mc'), 'mc still present');
 
   // 23) Clear flows
   goto('proxy');

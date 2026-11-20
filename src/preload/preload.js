@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('api', {
   listFlows: () => ipcRenderer.invoke('flows:list'),
   getFlow: (id) => ipcRenderer.invoke('flows:get', id),
   clearFlows: () => ipcRenderer.invoke('flows:clear'),
+  deleteFlows: (ids) => ipcRenderer.invoke('flows:delete', ids),
 
   // WebSocket
   listWs: () => ipcRenderer.invoke('ws:list'),

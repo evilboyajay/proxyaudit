@@ -11,7 +11,10 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 // ----------------------------- state -----------------------------
 const flows = new Map(); // id -> summary
-let selectedFlowId = null;
+let selectedFlowId = null; // flow shown in the detail pane (primary selection)
+const selectedIds = new Set(); // HTTP history multi-selection (⌘A, ⌘/Shift+click)
+let flowAnchorId = null; // anchor row for Shift+click range selection
+let renderedFlowIds = []; // ids in on-screen order (filter + sort applied)
 let currentFlow = null; // last fully-loaded flow (Proxy or Target), for shortcuts
 
 // Static fallback lineup, used if the live model list can't be fetched.
@@ -229,15 +232,32 @@ $('#flowFilter').addEventListener('input', (e) => {
   flowFilter = e.target.value.toLowerCase();
   renderFlowTable();
 });
-$('#clearFlowsBtn').addEventListener('click', async () => {
-  await api.clearFlows();
-  flows.clear();
+function resetFlowDetail() {
   selectedFlowId = null;
-  renderFlowTable();
+  selectFlow._current = null;
   reqViewer.setMessage('Select a request to inspect.');
   resViewer.setMessage('');
   updateDetailActions(null);
+}
+$('#clearFlowsBtn').addEventListener('click', async () => {
+  await api.clearFlows();
+  flows.clear();
+  selectedIds.clear();
+  flowAnchorId = null;
+  resetFlowDetail();
+  renderFlowTable();
 });
+// Delete flows from history (main store too, so the AI agent stops seeing them).
+async function deleteFlows(ids) {
+  ids = ids.filter((id) => flows.has(id));
+  if (!ids.length) return;
+  if (ids.length === flows.size) { $('#clearFlowsBtn').click(); toast('History cleared'); return; }
+  try { await api.deleteFlows(ids); } catch (_) {}
+  for (const id of ids) { flows.delete(id); selectedIds.delete(id); }
+  if (selectedFlowId && !flows.has(selectedFlowId)) resetFlowDetail();
+  renderFlowTable();
+  toast(ids.length === 1 ? 'Item deleted' : `${ids.length} items deleted`);
+}
 
 let scopeOnly = false;
 let httpFilterState = HttpFilter.defaultState();
@@ -267,7 +287,7 @@ function flowMatches(f) {
 function rowHtml(f) {
   const n = f.id.split('-').pop();
   return (
-    `<tr data-id="${f.id}" class="${f.id === selectedFlowId ? 'selected' : ''}">` +
+    `<tr data-id="${f.id}" class="${selectedIds.has(f.id) ? 'selected' : ''}">` +
     `<td class="muted">${n}</td>` +
     `<td class="method m-${f.method}">${f.method}</td>` +
     `<td title="${esc(f.host)}">${esc(f.host)}</td>` +
@@ -304,6 +324,7 @@ function renderFlowTable() {
       return 0; // stable sort keeps capture order as the final tie-breaker
     });
   }
+  renderedFlowIds = rows.map((f) => f.id);
   flowBody.innerHTML = rows.map(rowHtml).join('');
   $('#flowCount').textContent = flows.size;
 }
@@ -348,9 +369,60 @@ function scheduleRender() {
   requestAnimationFrame(renderFlowTable);
 }
 
+function applyFlowSelection() {
+  $$('#flowBody tr').forEach((tr) => tr.classList.toggle('selected', selectedIds.has(tr.dataset.id)));
+}
+// Click = select one · ⌘/Ctrl+click = toggle · Shift+click = range (like Burp/Finder).
 flowBody.addEventListener('click', (e) => {
   const tr = e.target.closest('tr');
-  if (tr) selectFlow(tr.dataset.id);
+  if (!tr || !tr.dataset.id) return;
+  const id = tr.dataset.id;
+  if (e.metaKey || e.ctrlKey) {
+    if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
+    flowAnchorId = id;
+    applyFlowSelection();
+    if (selectedIds.has(id)) selectFlow(id, { keep: true });
+    return;
+  }
+  if (e.shiftKey && flowAnchorId && renderedFlowIds.includes(flowAnchorId)) {
+    const a = renderedFlowIds.indexOf(flowAnchorId), b = renderedFlowIds.indexOf(id);
+    selectedIds.clear();
+    renderedFlowIds.slice(Math.min(a, b), Math.max(a, b) + 1).forEach((x) => selectedIds.add(x));
+    applyFlowSelection();
+    selectFlow(id, { keep: true });
+    return;
+  }
+  selectFlow(id);
+});
+// Remember whether the user last worked in the history table or the detail
+// pane: ⌘A / Delete act on rows only when the table is the focus area, so
+// ⌘A inside the request/response viewer still selects its text.
+let flowFocusZone = 'table';
+document.addEventListener('mousedown', (e) => {
+  if (!e.target.closest) return;
+  if (e.target.closest('#flowTable')) flowFocusZone = 'table';
+  else if (e.target.closest('#view-proxy')) flowFocusZone = 'other';
+}, true);
+window.addEventListener('keydown', (e) => {
+  const view = document.querySelector('.view.active');
+  if (!view || view.id !== 'view-proxy' || flowFocusZone !== 'table') return;
+  const ae = document.activeElement;
+  if (ae && (/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) || ae.isContentEditable)) return;
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'a') {
+    e.preventDefault();
+    if (window.getSelection) window.getSelection().removeAllRanges();
+    selectedIds.clear();
+    renderedFlowIds.forEach((id) => selectedIds.add(id));
+    applyFlowSelection();
+    if (renderedFlowIds.length) toast(`${renderedFlowIds.length} item(s) selected`);
+  } else if ((e.key === 'Delete' || e.key === 'Backspace') && !e.metaKey && !e.ctrlKey && selectedIds.size) {
+    e.preventDefault();
+    deleteFlows([...selectedIds]);
+  } else if (e.key === 'Escape' && selectedIds.size > 1) {
+    selectedIds.clear();
+    if (selectedFlowId) selectedIds.add(selectedFlowId);
+    applyFlowSelection();
+  }
 });
 
 // Arrow Up/Down move the selection through the active list (like Burp).
@@ -379,11 +451,16 @@ window.addEventListener('keydown', (e) => {
   if (typeof rows[next].scrollIntoView === 'function') rows[next].scrollIntoView({ block: 'nearest' });
 });
 
-async function selectFlow(id) {
+// Show a flow in the detail pane. Without {keep}, it also becomes the only
+// selected row; with {keep}, the current multi-selection is left as is.
+async function selectFlow(id, opts) {
   selectedFlowId = id;
-  $$('#flowBody tr').forEach((tr) =>
-    tr.classList.toggle('selected', tr.dataset.id === id)
-  );
+  if (!(opts && opts.keep)) {
+    selectedIds.clear();
+    selectedIds.add(id);
+    flowAnchorId = id;
+  }
+  applyFlowSelection();
   const flow = await api.getFlow(id);
   if (!flow) return;
   selectFlow._current = flow;
@@ -481,17 +558,7 @@ const ctxHistoryHandlers = {
     if (!links.length) { toast('No links found in response'); return; }
     ctxCopy(links.join('\n'), `${links.length} link(s) copied`);
   },
-  deleteItem: (flow) => {
-    flows.delete(flow.id);
-    if (selectedFlowId === flow.id) {
-      selectedFlowId = null;
-      reqViewer.setMessage('Select a request to inspect.');
-      resViewer.setMessage('');
-      updateDetailActions(null);
-    }
-    renderFlowTable();
-    toast('Item deleted');
-  },
+  deleteItem: (flow) => deleteFlows([flow.id]),
   clearHistory: () => { $('#clearFlowsBtn').click(); },
   saveItem: () => { api.exportJson().then(() => toast('Exported')); },
 };
@@ -514,6 +581,22 @@ flowBody.addEventListener('contextmenu', async (e) => {
   const tr = e.target.closest('tr');
   if (!tr || !tr.dataset.id) return;
   e.preventDefault();
+  flowFocusZone = 'table';
+  // Right-clicking inside a multi-selection acts on the whole selection.
+  if (selectedIds.size > 1 && selectedIds.has(tr.dataset.id)) {
+    const ids = renderedFlowIds.filter((id) => selectedIds.has(id));
+    const all = ids.length === flows.size;
+    ContextMenu.show(e.clientX, e.clientY, [
+      { label: `${ids.length} items selected`, disabled: true },
+      { separator: true },
+      { label: 'Copy URLs', action: () => ctxCopy(ids.map((id) => (flows.get(id) || {}).url).filter(Boolean).join('\n'), `${ids.length} URL(s) copied`) },
+      { separator: true },
+      { label: all ? `Delete all ${ids.length} items` : `Delete ${ids.length} selected items`, shortcut: '⌫', danger: true, action: () => deleteFlows(ids) },
+      { label: 'Clear history', danger: true, action: () => $('#clearFlowsBtn').click() },
+    ]);
+    return;
+  }
+  if (!selectedIds.has(tr.dataset.id) || selectedIds.size !== 1) selectFlow(tr.dataset.id);
   const flow = await api.getFlow(tr.dataset.id);
   if (!flow) return;
   ContextMenu.show(e.clientX, e.clientY, ContextMenu.historyMenuItems(flow, ctxHistoryHandlers));
@@ -1594,6 +1677,8 @@ api.on('evt:status', applyStatus);
 api.on('evt:error', (msg) => toast('⚠ ' + msg));
 api.on('evt:cleared', () => {
   flows.clear();
+  selectedIds.clear();
+  resetFlowDetail();
   renderFlowTable();
 });
 api.on('evt:flow', (summary) => {
@@ -1603,7 +1688,7 @@ api.on('evt:flow', (summary) => {
 api.on('evt:flow-update', (summary) => {
   flows.set(summary.id, summary);
   scheduleRender();
-  if (summary.id === selectedFlowId) selectFlow(summary.id);
+  if (summary.id === selectedFlowId) selectFlow(summary.id, { keep: true });
 });
 api.on('evt:intercept', (flow) => {
   interceptQueue.push(flow);

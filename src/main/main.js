@@ -361,6 +361,7 @@ function registerIpc() {
     store.listFlows().map((f) => ({ ...f, inScope: scope.inScope(f.url) }))
   );
   ipcMain.handle('flows:get', async (_e, id) => store.getFlow(id));
+  ipcMain.handle('flows:delete', async (_e, ids) => store.removeFlows(Array.isArray(ids) ? ids : []));
   ipcMain.handle('flows:clear', async () => {
     store.clear();
     return true;

@@ -117,6 +117,15 @@ class Store {
     }));
   }
 
+  // Remove specific flows (HTTP history "Delete item(s)"). Returns count removed.
+  removeFlows(ids) {
+    const drop = new Set(ids || []);
+    const before = this.flows.length;
+    this.flows = this.flows.filter((f) => !drop.has(f.id));
+    for (const id of drop) this.flowIndex.delete(id);
+    return before - this.flows.length;
+  }
+
   clear() {
     this.flows = [];
     this.flowIndex.clear();

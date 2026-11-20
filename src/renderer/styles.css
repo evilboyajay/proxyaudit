@@ -170,6 +170,7 @@ tbody td {
 tbody tr { cursor: pointer; }
 tbody tr:hover { background: var(--bg-2); }
 tbody tr.selected { background: var(--sel); }
+#flowBody { user-select: none; } /* rows select as rows (⌘A/Shift+click), not as text */
 .method { font-family: var(--mono); font-weight: 600; }
 .m-GET { color: var(--accent-2); }
 .m-POST { color: var(--green); }
