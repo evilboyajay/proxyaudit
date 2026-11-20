@@ -288,6 +288,23 @@ function goto(view) {
   const firstMethod = window.document.querySelector('#flowBody tr .method') && window.document.querySelector('#flowBody tr .method').textContent;
   check('proxy: header click sorts (by method asc)', firstMethod === 'GET', 'first=' + firstMethod);
   check('proxy: sorted header shows indicator', /▲/.test(methodTh.textContent), 'no arrow: ' + methodTh.textContent);
+  // Multi-column sort: Method asc, then Shift+click Host (asc → desc)
+  fire('evt:flow-update', { id: 'sf3', method: 'GET', scheme: 'https', host: 'b.com', path: '/3', url: 'https://b.com/3', status: 200, mime: 'text/html', length: 10 });
+  await wait(10);
+  const hostTh = Array.from(window.document.querySelectorAll('#flowTable thead th')).find((t) => t.dataset.key === 'host');
+  const sfOrder = () => Array.from(window.document.querySelectorAll('#flowBody tr')).map((r) => r.dataset.id).filter((id) => /^sf/.test(id));
+  hostTh.dispatchEvent(new window.MouseEvent('click', { bubbles: true, shiftKey: true }));
+  await wait(5);
+  check('proxy: shift+click adds secondary sort (method, host asc)', sfOrder().join() === 'sf1,sf3,sf0,sf2', 'order=' + sfOrder().join());
+  check('proxy: multi-sort headers show priority', /▲1/.test(methodTh.textContent) && /▲2/.test(hostTh.textContent), methodTh.textContent + ' / ' + hostTh.textContent);
+  hostTh.dispatchEvent(new window.MouseEvent('click', { bubbles: true, shiftKey: true }));
+  await wait(5);
+  check('proxy: shift+click again flips secondary to desc', sfOrder().join() === 'sf3,sf1,sf0,sf2', 'order=' + sfOrder().join());
+  click(hostTh);
+  await wait(5);
+  check('proxy: plain click resets to single-column sort', !/▲|▼/.test(methodTh.textContent) && /Host ▲$/.test(hostTh.textContent), methodTh.textContent + ' / ' + hostTh.textContent);
+  click(methodTh);
+  await wait(5);
   // arrow-down from a selected row moves selection to the next row
   const firstRow = window.document.querySelector('#flowBody tr');
   firstRow.click();
@@ -370,6 +387,26 @@ function goto(view) {
   await wait(5);
   check('build: TodoWrite renders a checklist', window.document.querySelectorAll('#chatMessages .todo-item').length >= 2, 'no todo items');
   fire('evt:assistant-event', { turnId: t2, event: { type: 'done', sessionId: 'sess-1' } });
+  await wait(5);
+
+  // Subagent visibility: started → nested tool calls → progress → completed
+  setVal($('#chatInput'), 'audit the JS');
+  click($('#chatSendBtn'));
+  await wait(20);
+  const t3 = calls.assistantSend[calls.assistantSend.length - 1][0].turnId;
+  fire('evt:assistant-event', { turnId: t3, event: { type: 'tool_use', name: 'Agent', id: 'tu-1', input: { subagent_type: 'security-auditor', description: 'Client-side JS review' } } });
+  fire('evt:assistant-event', { turnId: t3, event: { type: 'subagent', phase: 'started', taskId: 'task-1', toolUseId: 'tu-1', subagentType: 'security-auditor', description: 'Client-side JS review' } });
+  await wait(5);
+  const card = () => window.document.querySelector('#chatMessages .chat-msg.subagent');
+  check('build: subagent card appears on task_started', !!card() && /security-auditor/.test(card().textContent) && /running/.test(card().textContent), card() ? card().textContent : 'no card');
+  const toolsBefore = window.document.querySelectorAll('#chatMessages .chat-msg.tool').length;
+  fire('evt:assistant-event', { turnId: t3, event: { type: 'tool_use', name: 'mcp__proxy__list_js_files', input: {}, parent: 'tu-1' } });
+  await wait(5);
+  check('build: subagent tool calls update the card, not the main transcript', window.document.querySelectorAll('#chatMessages .chat-msg.tool').length === toolsBefore && /1 tool use/.test(card().textContent) && /list_js_files/.test(card().textContent), card().textContent);
+  fire('evt:assistant-event', { turnId: t3, event: { type: 'subagent', phase: 'notification', taskId: 'task-1', toolUseId: 'tu-1', status: 'completed', summary: 'Found DOM-XSS sink in app.js', usage: { tool_uses: 7, duration_ms: 65000 } } });
+  await wait(5);
+  check('build: subagent card shows completion + result', card().classList.contains('completed') && /7 tool uses/.test(card().textContent) && /1m 5s/.test(card().textContent) && /DOM-XSS/.test(card().textContent), card().textContent);
+  fire('evt:assistant-event', { turnId: t3, event: { type: 'done', sessionId: 'sess-1' } });
   await wait(5);
 
   // 9b) Multi-chat: conversations run concurrently in the background

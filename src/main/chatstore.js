@@ -22,7 +22,7 @@ const crypto = require('crypto');
  *   remove(id)                  -> true/false
  *   clear()                     -> true
  *
- * role is one of 'user' | 'assistant' | 'tool' | 'tool_result'.
+ * role is one of 'user' | 'assistant' | 'tool' | 'tool_result' | 'subagent'.
  * The title is derived from the first user message when a chat is untitled.
  */
 class ChatStore {

@@ -630,6 +630,19 @@ thead th { box-shadow: inset 0 -1px 0 var(--line); }
 .chat-msg.status.done { color: var(--fg-dim); }
 .chat-msg.status .spinner { margin-right: 4px; vertical-align: -1px; }
 
+/* ---------- Build chat: subagent cards ---------- */
+.chat-msg.subagent { align-self: flex-start; width: 100%; max-width: 100%; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; padding: 8px 10px; background: var(--bg-2); font-size: 12px; }
+.chat-msg.subagent.completed { border-left-color: var(--green); }
+.chat-msg.subagent.failed { border-left-color: var(--red); }
+.chat-msg.subagent.stopped { border-left-color: var(--muted); }
+.subagent-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.subagent-icon { width: 14px; text-align: center; }
+.subagent-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-meta { margin: 3px 0 0 20px; }
+.subagent-summary { margin: 6px 0 0 20px; }
+.subagent-summary summary { cursor: pointer; color: var(--fg-dim); }
+.subagent-summary > div { margin-top: 4px; max-height: 320px; overflow: auto; }
+
 /* ---------- sortable table headers ---------- */
 thead th[data-key] { user-select: none; }
 thead th[data-key]:hover { color: var(--fg); }

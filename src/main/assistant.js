@@ -23,7 +23,7 @@ const { claudeExecutable } = require('./sdkpath');
 const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob', 'WebFetch'];
 // In agent mode the Build agent can also spawn SUBAGENTS via Task (Claude-Code
 // style fan-out), so one conversation can parallelise a large audit.
-const AGENT_TOOLS = ['Read', 'Grep', 'Glob', 'WebFetch', 'Write', 'Edit', 'Bash', 'TodoWrite', 'Task'];
+const AGENT_TOOLS = ['Read', 'Grep', 'Glob', 'WebFetch', 'Write', 'Edit', 'Bash', 'TodoWrite', 'Task', 'Agent']; // 'Agent' = Task's name in newer Claude Code
 
 // Subagent types the main agent can launch with Task. They inherit the proxy
 // tools and focus on analysis (no Write/Edit/Bash — the main agent owns PoC
@@ -65,9 +65,9 @@ const SUBAGENTS = {
 const SYSTEM_PROMPT = `You are a WORLD-CLASS offensive-security and exploit-development assistant embedded inside a web-security proxy (a Burp Suite alternative), working for an AUTHORIZED penetration tester. You operate ONLY against systems the tester is explicitly permitted to test; you never attack third parties, and you refuse requests that are clearly not authorized testing.
 
 # Your capabilities (tools)
-- mcp__proxy__list_flows — enumerate captured HTTP traffic (filter by host/method/status). Each line starts with "#<id>".
+- mcp__proxy__list_flows — enumerate captured HTTP traffic, newest first with capture times (filter by host/method/status/path). For "latest"/"new"/"not audited yet" traffic, use since_minutes or after_id=<newest id from your previous list> so you only see new flows. Each line starts with "#<id> [HH:MM:SS]".
 - mcp__proxy__get_flow — full request+response for one flow id (headers, body).
-- mcp__proxy__search_flows — grep all captured flows (URLs, headers, bodies) for a substring.
+- mcp__proxy__search_flows — grep captured flows (URLs, "Name: value" headers, bodies) for a substring, newest first; same filters as list_flows (e.g. query "authorization: bearer", since_minutes 10 to find the current session's token).
 - mcp__proxy__send_request — replay/tamper an arbitrary request to probe behaviour and verify findings (TLS validation disabled).
 - mcp__proxy__open_in_browser — drive the proxied Chromium to a URL so new traffic is captured (crawl, trigger flows, generate coverage), then read it with list_flows/get_flow.
 - mcp__proxy__list_js_files — list distinct JavaScript responses captured (great for source review of client-side logic, secrets, endpoints).
@@ -106,7 +106,7 @@ class Assistant {
     this.workspace = opts.workspace || path.join(os.homedir(), '.proxyaudit', 'workspace');
     fs.mkdirSync(this.workspace, { recursive: true });
     this._sdk = null;
-    this._server = null;
+    this._tools = null; // cached proxy tool definitions (see _buildServer)
     this._controllers = new Map(); // turnId -> AbortController
     // Optional hook injected by main: browse(url) -> Promise<{ok, browser?, error?}>.
     // Drives the proxied Chromium so the open_in_browser tool can generate traffic.
@@ -120,12 +120,54 @@ class Assistant {
 
   _flowBrief(f) {
     const r = f.response;
-    return `#${f.id} ${f.method} ${f.url} -> ${r ? r.status : '(pending)'} ${r ? (r.mime || '') : ''} ${r ? (r.length || 0) + 'B' : ''}`;
+    const t = f.ts ? new Date(f.ts).toTimeString().slice(0, 8) : '--:--:--';
+    return `#${f.id} [${t}] ${f.method} ${f.url} -> ${r ? r.status : '(pending)'} ${r ? (r.mime || '') : ''} ${r ? (r.length || 0) + 'B' : ''}`;
   }
 
+  // Shared selection for list_flows/search_flows: capture-ordered flows filtered
+  // by host/method/status/path, "newer than" (after_id / since_minutes), and
+  // with CORS preflights hidden unless asked for. Returns full flow objects in
+  // capture order (oldest → newest).
+  _selectFlows(args) {
+    const store = this.store;
+    let flows = store.flows ? store.flows.slice() : store.listFlows().map((s) => store.getFlow(s.id)).filter(Boolean);
+    if (args.after_id) {
+      const id = String(args.after_id).replace(/^#/, '');
+      const i = flows.findIndex((f) => f.id === id);
+      if (i >= 0) flows = flows.slice(i + 1);
+    }
+    if (args.since_minutes) {
+      const cutoff = Date.now() - args.since_minutes * 60000;
+      flows = flows.filter((f) => (f.ts || 0) >= cutoff);
+    }
+    if (!args.include_options && (args.method || '').toUpperCase() !== 'OPTIONS') {
+      flows = flows.filter((f) => f.method !== 'OPTIONS');
+    }
+    if (args.host) flows = flows.filter((f) => (f.host || '').includes(args.host));
+    if (args.method) flows = flows.filter((f) => f.method === args.method.toUpperCase());
+    if (args.status) flows = flows.filter((f) => (f.response && f.response.status) === args.status);
+    if (args.path) flows = flows.filter((f) => (f.path || f.url || '').includes(args.path));
+    return flows;
+  }
+
+  // A fresh in-process MCP server per chat turn. An SDK MCP server instance can
+  // be connected to only ONE session at a time ("Already connected to a
+  // transport"), so sharing one across turns made any turn that overlapped
+  // another (multi-chat, goal-loop continuation) start without the proxy tools.
+  // Tool definitions are stateless and cached; only the server wrapper is new.
   async _buildServer() {
-    if (this._server) return this._server;
-    const { createSdkMcpServer, tool } = await this._getSdk();
+    const { createSdkMcpServer } = await this._getSdk();
+    return createSdkMcpServer({
+      name: 'proxy',
+      version: '1.0.0',
+      alwaysLoad: true, // never defer proxy tools behind ToolSearch
+      tools: await this._proxyTools(),
+    });
+  }
+
+  async _proxyTools() {
+    if (this._tools) return this._tools;
+    const { tool } = await this._getSdk();
     const store = this.store;
     const txt = (t) => ({ content: [{ type: 'text', text: String(t) }] });
     const normUrl = (u) => {
@@ -136,19 +178,30 @@ class Assistant {
     const noBrowser = () =>
       txt('Browser control is unavailable (could not drive the proxied Chromium over CDP).');
 
+    const FLOW_FILTERS = {
+      host: z.string().optional().describe('Host substring filter'),
+      method: z.string().optional().describe('HTTP method, e.g. POST'),
+      status: z.number().optional().describe('Response status code'),
+      path: z.string().optional().describe('URL path substring filter'),
+      after_id: z.string().optional().describe('Only flows captured AFTER this flow id — use the newest id from your previous call to get only new, not-yet-reviewed traffic'),
+      since_minutes: z.number().optional().describe('Only flows captured in the last N minutes'),
+      include_options: z.boolean().optional().describe('Include CORS OPTIONS preflights (hidden by default)'),
+    };
     const listFlows = tool(
       'list_flows',
-      'List captured HTTP flows (proxy history). Optionally filter by host substring, method, or status code. Returns one line per flow with its id.',
-      { host: z.string().optional(), method: z.string().optional(), status: z.number().optional(), limit: z.number().optional() },
+      'List captured HTTP flows (proxy history), NEWEST FIRST, each with its capture time. Filter by host/method/status/path. ' +
+        'For "latest"/"new"/"not yet audited" traffic use since_minutes or after_id (the newest id you saw last time). ' +
+        'CORS OPTIONS preflights are hidden unless include_options is true. Each line starts with "#<id> [HH:MM:SS]".',
+      { ...FLOW_FILTERS, limit: z.number().optional().describe('Max flows to return (default 100), newest first') },
       async (args) => {
-        let flows = store.listFlows();
-        if (args.host) flows = flows.filter((f) => (f.host || '').includes(args.host));
-        if (args.method) flows = flows.filter((f) => f.method === args.method.toUpperCase());
-        if (args.status) flows = flows.filter((f) => f.status === args.status);
-        flows = flows.slice(-(args.limit || 200));
-        const full = flows.map((s) => store.getFlow(s.id)).filter(Boolean);
-        const text = full.length ? full.map((f) => this._flowBrief(f)).join('\n') : '(no matching flows)';
-        return { content: [{ type: 'text', text: `${full.length} flow(s):\n${text}` }] };
+        const all = this._selectFlows(args);
+        const shown = all.slice(-(args.limit || 100)).reverse(); // newest first
+        if (!shown.length) return txt('(no matching flows)' + (args.after_id ? ` after #${args.after_id}` : ''));
+        const total = store.flows ? store.flows.length : store.listFlows().length;
+        const head = `${shown.length} of ${all.length} matching flow(s), newest first (total captured: ${total}). ` +
+          `Newest: #${shown[0].id}. To fetch only newer traffic later, pass after_id="${shown[0].id}".` +
+          (all.length > shown.length ? ` ${all.length - shown.length} older matching flow(s) not shown — narrow filters or raise limit.` : '');
+        return txt(head + '\n' + shown.map((f) => this._flowBrief(f)).join('\n'));
       }
     );
 
@@ -171,25 +224,22 @@ class Assistant {
 
     const searchFlows = tool(
       'search_flows',
-      'Search captured flows for a substring (case-insensitive) across URL, request/response headers and bodies. Returns matching flow ids.',
-      { query: z.string(), limit: z.number().optional() },
+      'Search captured flows for a substring (case-insensitive) across URL, request/response headers (as "Name: value" lines) and bodies. ' +
+        'Results are NEWEST FIRST. Accepts the same filters as list_flows (host, method, after_id, since_minutes, …). ' +
+        'Example: query "authorization: bearer" with since_minutes 15 finds the newest authenticated requests.',
+      { query: z.string(), ...FLOW_FILTERS, limit: z.number().optional().describe('Max hits (default 100), newest first') },
       async (args) => {
         const q = args.query.toLowerCase();
+        const H = (h) => Object.entries(h || {}).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join('\n');
+        const flows = this._selectFlows(args);
         const hits = [];
-        for (const s of store.listFlows()) {
-          const f = store.getFlow(s.id);
-          if (!f) continue;
-          const hay = [
-            f.url,
-            JSON.stringify(f.request && f.request.headers),
-            f.request && f.request.body,
-            JSON.stringify(f.response && f.response.headers),
-            f.response && f.response.body,
-          ].join(' ').toLowerCase();
+        for (let i = flows.length - 1; i >= 0 && hits.length < (args.limit || 100); i--) {
+          const f = flows[i];
+          const req = f.request || {}, res = f.response || {};
+          const hay = [f.method + ' ' + f.url, H(req.headers), req.body, H(res.headers), res.body].join('\n').toLowerCase();
           if (hay.includes(q)) hits.push(this._flowBrief(f));
-          if (hits.length >= (args.limit || 100)) break;
         }
-        return { content: [{ type: 'text', text: hits.length ? hits.join('\n') : '(no matches)' }] };
+        return txt(hits.length ? `${hits.length} match(es), newest first:\n` + hits.join('\n') : '(no matches)');
       }
     );
 
@@ -363,14 +413,10 @@ class Assistant {
       }
     );
 
-    this._server = createSdkMcpServer({
-      name: 'proxy',
-      version: '1.0.0',
-      tools: [listFlows, getFlow, searchFlows, sendReq, openInBrowser, listJsFiles,
-        crawlSite, browserNavigate, browserGetLinks, browserClick, browserReadPage,
-        enumSubdomains],
-    });
-    return this._server;
+    this._tools = [listFlows, getFlow, searchFlows, sendReq, openInBrowser, listJsFiles,
+      crawlSite, browserNavigate, browserGetLinks, browserClick, browserReadPage,
+      enumSubdomains];
+    return this._tools;
   }
 
   /**
@@ -407,7 +453,11 @@ class Assistant {
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       cwd: this.workspace,
-      env: sdkEnv(),
+      // Keep subagents in the foreground: the turn is a one-shot string prompt,
+      // so a backgrounded subagent would leave the main agent saying "still
+      // running…" and ending its turn before the subagent's result comes back.
+      // Several foreground subagents launched in one message still run in parallel.
+      env: { ...sdkEnv(), CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
       pathToClaudeCodeExecutable: claudeExecutable(),
       abortController: controller,
       includePartialMessages: true, // stream text/thinking live, not just at the end
@@ -437,12 +487,27 @@ class Assistant {
       for await (const msg of query({ prompt: message, options })) {
         if (msg.type === 'system') {
           if (msg.session_id) newSessionId = msg.session_id;
+          // Subagent lifecycle → UI, so launched subagents are visible live.
+          if (msg.subtype === 'task_started' || msg.subtype === 'task_progress' || msg.subtype === 'task_notification') {
+            onEvent({
+              type: 'subagent',
+              phase: msg.subtype.slice(5), // started | progress | notification
+              taskId: msg.task_id,
+              toolUseId: msg.tool_use_id || null,
+              description: msg.description || '',
+              subagentType: msg.subagent_type || '',
+              lastTool: msg.last_tool_name || '',
+              usage: msg.usage || null,
+              status: msg.status || (msg.subtype === 'task_notification' ? 'completed' : 'running'),
+              summary: (msg.summary || '').slice(0, 4000),
+            });
+          }
           if (msg.subtype === 'api_retry' && (msg.error_status === 401 || /auth/i.test(msg.error || ''))) {
             authFailed = true;
             controller.abort();
             break;
           }
-        } else if (msg.type === 'stream_event' && msg.event) {
+        } else if (msg.type === 'stream_event' && msg.event && !msg.parent_tool_use_id) {
           // Live token streaming (text + thinking) as the model writes.
           const ev = msg.event;
           if (ev.type === 'content_block_delta' && ev.delta) {
@@ -456,21 +521,23 @@ class Assistant {
         } else if (msg.type === 'assistant' && msg.message && msg.message.content) {
           // The complete message: emit tool calls; text/thinking already streamed
           // via stream_event (only re-emit text if nothing streamed, as a fallback).
+          // parent_tool_use_id is set on messages produced inside a subagent.
+          const parent = msg.parent_tool_use_id || null;
           for (const block of msg.message.content) {
             if (block.type === 'text' && block.text) {
-              if (!sawTextDelta) onEvent({ type: 'text', text: block.text });
+              if (!parent && !sawTextDelta) onEvent({ type: 'text', text: block.text });
             } else if (block.type === 'tool_use') {
-              onEvent({ type: 'tool_use', name: block.name, input: block.input });
+              onEvent({ type: 'tool_use', name: block.name, input: block.input, id: block.id, parent });
             }
           }
-          sawTextDelta = false;
+          if (!parent) sawTextDelta = false;
         } else if (msg.type === 'user' && msg.message && Array.isArray(msg.message.content)) {
           for (const block of msg.message.content) {
             if (block.type === 'tool_result') {
               const text = Array.isArray(block.content)
                 ? block.content.map((c) => (c.type === 'text' ? c.text : '')).join('')
                 : String(block.content || '');
-              onEvent({ type: 'tool_result', text: (text || '').slice(0, 4000) });
+              onEvent({ type: 'tool_result', text: (text || '').slice(0, 4000), toolUseId: block.tool_use_id, parent: msg.parent_tool_use_id || null });
             }
           }
         } else if (msg.type === 'result') {

@@ -279,44 +279,66 @@ function rowHtml(f) {
   );
 }
 let renderScheduled = false;
-const flowSort = { key: null, dir: 1 }; // null = capture order
+// Multi-column sort: ordered list of { key, dir }. Empty = capture order.
+// Plain click sorts by that column alone; Shift/Cmd/Ctrl+click adds it as the
+// next tie-breaker (e.g. Method, then Host). Each click cycles asc → desc → off.
+const flowSort = [];
 const FLOW_NUMERIC = { ts: 1, status: 1, length: 1 };
+function cmpFlowKey(a, b, k) {
+  let av = a[k], bv = b[k];
+  if (FLOW_NUMERIC[k]) return (Number(av) || 0) - (Number(bv) || 0);
+  av = (av == null ? '' : String(av)).toLowerCase();
+  bv = (bv == null ? '' : String(bv)).toLowerCase();
+  return av < bv ? -1 : av > bv ? 1 : 0;
+}
 function renderFlowTable() {
   renderScheduled = false;
   const rows = [];
   for (const f of flows.values()) if (flowMatches(f)) rows.push(f);
-  if (flowSort.key) {
-    const k = flowSort.key;
-    const num = FLOW_NUMERIC[k];
+  if (flowSort.length) {
     rows.sort((a, b) => {
-      let av = a[k], bv = b[k];
-      if (num) { av = Number(av) || 0; bv = Number(bv) || 0; return (av - bv) * flowSort.dir; }
-      av = (av == null ? '' : String(av)).toLowerCase();
-      bv = (bv == null ? '' : String(bv)).toLowerCase();
-      return av < bv ? -flowSort.dir : av > bv ? flowSort.dir : 0;
+      for (const { key, dir } of flowSort) {
+        const c = cmpFlowKey(a, b, key);
+        if (c) return c * dir;
+      }
+      return 0; // stable sort keeps capture order as the final tie-breaker
     });
   }
   flowBody.innerHTML = rows.map(rowHtml).join('');
   $('#flowCount').textContent = flows.size;
 }
-// Click a column header to sort (toggles asc/desc); click again to cycle off.
+function toggleFlowSort(key, additive) {
+  const i = flowSort.findIndex((s) => s.key === key);
+  if (!additive) {
+    // Single-column mode: cycle this column, drop all others.
+    const cur = flowSort.length === 1 && i === 0 ? flowSort[0].dir : 0;
+    flowSort.length = 0;
+    if (cur === 0) flowSort.push({ key, dir: 1 });
+    else if (cur === 1) flowSort.push({ key, dir: -1 });
+    return;
+  }
+  if (i < 0) flowSort.push({ key, dir: 1 });
+  else if (flowSort[i].dir === 1) flowSort[i].dir = -1;
+  else flowSort.splice(i, 1);
+}
 $$('#flowTable thead th').forEach((th) => {
   if (!th.dataset.key) return;
   th.style.cursor = 'pointer';
-  th.addEventListener('click', () => {
-    const key = th.dataset.key;
-    if (flowSort.key !== key) { flowSort.key = key; flowSort.dir = 1; }
-    else if (flowSort.dir === 1) { flowSort.dir = -1; }
-    else { flowSort.key = null; } // third click: back to capture order
+  th.title = 'Click to sort · Shift+click to add as secondary sort';
+  th.addEventListener('click', (e) => {
+    toggleFlowSort(th.dataset.key, e.shiftKey || e.metaKey || e.ctrlKey);
     updateSortHeaders();
     renderFlowTable();
   });
 });
 function updateSortHeaders() {
+  const multi = flowSort.length > 1;
   $$('#flowTable thead th').forEach((th) => {
     if (!th.dataset.label) return;
-    const active = flowSort.key === th.dataset.key;
-    th.textContent = th.dataset.label + (active ? (flowSort.dir === 1 ? ' ▲' : ' ▼') : '');
+    const i = flowSort.findIndex((s) => s.key === th.dataset.key);
+    const active = i >= 0;
+    th.textContent = th.dataset.label +
+      (active ? (flowSort[i].dir === 1 ? ' ▲' : ' ▼') + (multi ? String(i + 1) : '') : '');
     th.classList.toggle('sorted', active);
   });
 }
@@ -998,6 +1020,9 @@ function chatRenderStored(messages) {
       chatAppend('tool', `<span class="chat-tool-name">⚙ ${esc(name)}</span> <code>${esc(m.content).slice(0, 400)}</code>`);
     } else if (m.role === 'tool_result') {
       chatAppend('tool-result', `<pre class="chat-code">${esc(m.content)}</pre>`);
+    } else if (m.role === 'subagent') {
+      const sa = { ...(m.meta || {}), summary: m.content };
+      chatAppend('subagent ' + (sa.status || 'completed'), subagentCardHtml(sa));
     }
   }
 }
@@ -1017,6 +1042,13 @@ function reattachRun(run) {
   if (run.thinkBuf) {
     actThinkEl = chatAppend('thinking muted', '');
     actThinkEl.textContent = '💭 ' + run.thinkBuf.slice(-4000);
+  }
+  if (run.subagents) {
+    for (const sa of run.subagents.values()) {
+      if (sa.status !== 'running') continue;
+      sa.el = chatAppend('subagent running', '');
+      renderSubagent(sa);
+    }
   }
   startActiveStatus(run);
   scrollMessages();
@@ -1285,6 +1317,66 @@ api.on('extension:status', renderExtStatus);
 refreshExtStatus();
 setInterval(refreshExtStatus, 4000);
 
+// ---- subagents: one live card per launched subagent ----
+function fmtDur(ms) {
+  const s = Math.round((ms || 0) / 1000);
+  return s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+}
+function subagentCardHtml(sa) {
+  const icon = sa.status === 'running' ? '<span class="spinner"></span>'
+    : sa.status === 'completed' ? '✓' : sa.status === 'failed' ? '✗' : '■';
+  const meta = [sa.status === 'running' ? 'running' : sa.status];
+  if (sa.toolUses) meta.push(sa.toolUses + ' tool use' + (sa.toolUses === 1 ? '' : 's'));
+  if (sa.ms) meta.push(fmtDur(sa.ms));
+  if (sa.status === 'running' && sa.lastTool) meta.push('last: ' + sa.lastTool.replace(/^mcp__proxy__/, ''));
+  return `<div class="subagent-head"><span class="subagent-icon">${icon}</span>` +
+    `<span class="chat-tool-name">🤖 ${esc(sa.subagentType || 'subagent')}</span> ` +
+    `<span class="subagent-desc">${esc(sa.description || '')}</span></div>` +
+    `<div class="subagent-meta muted">${esc(meta.join(' · '))}</div>` +
+    (sa.summary && sa.status !== 'running' ? `<details class="subagent-summary"><summary>Result</summary><div>${chatMdLite(sa.summary)}</div></details>` : '');
+}
+function renderSubagent(sa) {
+  if (!sa.el || !sa.el.isConnected) return;
+  sa.el.className = 'chat-msg subagent ' + sa.status;
+  sa.el.innerHTML = subagentCardHtml(sa);
+}
+function findSubagentByToolUse(run, toolUseId) {
+  if (!run.subagents || !toolUseId) return null;
+  for (const sa of run.subagents.values()) if (sa.toolUseId === toolUseId) return sa;
+  return null;
+}
+function handleSubagentEvent(run, convId, active, event) {
+  if (!run.subagents) run.subagents = new Map();
+  let sa = run.subagents.get(event.taskId);
+  if (!sa) {
+    sa = { taskId: event.taskId, toolUseId: event.toolUseId, subagentType: event.subagentType,
+      description: event.description, status: 'running', toolUses: 0, ms: 0, lastTool: '', summary: '' };
+    run.subagents.set(event.taskId, sa);
+    if (active) { flushSegment(run); closeThinkActive(run); closeStreamActive(); sa.el = chatAppend('subagent running', ''); }
+  }
+  if (event.subagentType) sa.subagentType = event.subagentType;
+  if (event.description) sa.description = event.description;
+  if (event.toolUseId) sa.toolUseId = event.toolUseId;
+  if (event.usage) { sa.toolUses = event.usage.tool_uses || sa.toolUses; sa.ms = event.usage.duration_ms || sa.ms; }
+  if (event.lastTool) sa.lastTool = event.lastTool;
+  if (event.phase === 'notification') {
+    sa.status = event.status || 'completed';
+    sa.summary = event.summary || '';
+    persistSubagent(convId, sa);
+  }
+  renderSubagent(sa);
+  if (active) scrollMessages();
+}
+function persistSubagent(convId, sa) {
+  if (sa.persisted) return;
+  sa.persisted = true;
+  api.chatAppend(convId, {
+    role: 'subagent',
+    content: sa.summary || '',
+    meta: { subagentType: sa.subagentType, description: sa.description, status: sa.status, toolUses: sa.toolUses, ms: sa.ms },
+  });
+}
+
 // Route every assistant event to the conversation whose turn produced it.
 // Persist to that conversation's store always; render to the DOM only when it
 // is the conversation currently on screen. Background turns thus keep running
@@ -1314,6 +1406,17 @@ api.on('evt:assistant-event', ({ turnId, event }) => {
       actThinkEl.textContent = '💭 ' + run.thinkBuf.slice(-4000);
       scrollMessages();
     }
+  } else if (event.type === 'subagent') {
+    handleSubagentEvent(run, convId, active, event);
+  } else if (event.parent) {
+    // A tool call made INSIDE a subagent: reflect it on that subagent's card
+    // instead of interleaving it with the main agent's transcript.
+    const sa = findSubagentByToolUse(run, event.parent);
+    if (sa && event.type === 'tool_use') {
+      sa.toolUses += 1;
+      sa.lastTool = event.name || sa.lastTool;
+      renderSubagent(sa);
+    }
   } else if (event.type === 'tool_use') {
     flushSegment(run); // persist any assistant text before the tool call
     api.chatAppend(convId, {
@@ -1335,6 +1438,14 @@ api.on('evt:assistant-event', ({ turnId, event }) => {
 function finishRun(run, event) {
   const active = isActive(run.convId);
   flushSegment(run);
+  if (run.subagents) {
+    for (const sa of run.subagents.values()) {
+      if (sa.status !== 'running') continue;
+      sa.status = 'stopped';
+      persistSubagent(run.convId, sa);
+      renderSubagent(sa);
+    }
+  }
   if (event.sessionId) {
     run.sessionId = event.sessionId;
     api.chatSetSession(run.convId, event.sessionId);
