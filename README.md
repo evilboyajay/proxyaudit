@@ -50,7 +50,7 @@ your captured traffic, map the attack surface, and write up findings.
 | **Intercept** | Hold requests in-flight, edit method/path/headers, forward or drop |
 | **Target / site map** | Host → path tree built automatically from captured traffic |
 | **Repeater** | Edit and resend any request across multiple tabs |
-| **Intruder** | Payload fuzzing with `§positions§` — Sniper, Battering ram, Pitchfork, Cluster bomb |
+| **Intruder** | Payload fuzzing with `§positions§` — Sniper, Battering ram, Pitchfork, Cluster bomb — with up to 1000 concurrent threads |
 | **Sequencer** | Session-token randomness analysis (per-char and overall Shannon entropy) |
 | **Decoder** | Stackable Base64, URL, HTML, Hex, ASCII, Gzip and JWT encode/decode, plus smart-decode |
 | **Comparer** | Line- or word-level visual diff |

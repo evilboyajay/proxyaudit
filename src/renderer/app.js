@@ -2065,7 +2065,7 @@ $('#intrStartBtn').addEventListener('click', async () => {
     template,
     attackType: $('#intrAttackType').value,
     payloadSets: intrConfigs,
-    concurrency: 10,
+    concurrency: Math.min(1000, Math.max(1, parseInt($('#intrConc').value, 10) || 10)),
   });
   intrAttackId = res.attackId;
   $('#intrStartBtn').disabled = true;

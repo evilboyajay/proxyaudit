@@ -74,7 +74,7 @@ class Sequencer extends EventEmitter {
     }
 
     const total = clampInt(count, 1, MAX_TOKENS, 200);
-    const conc = clampInt(concurrency, 1, 200, 10);
+    const conc = clampInt(concurrency, 1, 1000, 10);
     const source = tokenSource || { type: 'regex', pattern: '.*', group: 0 };
 
     const job = {

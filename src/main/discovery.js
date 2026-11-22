@@ -110,7 +110,7 @@ class Discovery extends EventEmitter {
     };
     this.jobs.set(jobId, job);
 
-    const workers = Math.max(1, Math.min(Number(concurrency) || 15, 100));
+    const workers = Math.max(1, Math.min(Number(concurrency) || 15, 1000));
     let next = 0;
 
     const worker = async () => {

@@ -42,6 +42,11 @@ class Intruder extends EventEmitter {
     this._seq = 0;
   }
 
+  /** Upper bound for parallel requests in one attack; the UI defaults to 10. */
+  static get MAX_CONCURRENCY() {
+    return 1000;
+  }
+
   // --------------------------- template parsing ---------------------------
 
   /**
@@ -542,7 +547,7 @@ class Intruder extends EventEmitter {
       payloadSets: resolvedSets,
       headersBaseline: headersBaseline || {},
       timeoutMs,
-      concurrency: Math.max(1, Number(concurrency) || 10),
+      concurrency: Math.max(1, Math.min(Number(concurrency) || 10, Intruder.MAX_CONCURRENCY)),
       total,
       done: 0,
       stopped: false,

@@ -214,6 +214,8 @@
               <option value="pitchfork">Pitchfork</option>
               <option value="clusterbomb">Cluster bomb</option>
             </select>
+            <label class="field-label" for="intrConc">Threads</label>
+            <input id="intrConc" class="input" style="width:80px" type="number" min="1" max="1000" value="10" title="Concurrent requests (1–1000)" />
             <span id="intrCount" class="muted"></span>
             <div class="spacer"></div>
             <button class="btn primary" id="intrStartBtn">Start attack</button>
@@ -329,7 +331,7 @@
                 <span class="field-label">Count</span>
                 <input id="seq-count" class="input" style="width:90px" type="number" value="200" min="1" />
                 <span class="field-label">Concurrency</span>
-                <input id="seq-conc" class="input" style="width:90px" type="number" value="10" min="1" />
+                <input id="seq-conc" class="input" style="width:90px" type="number" value="10" min="1" max="1000" />
               </div>
             </div>
             <div class="col">
@@ -394,7 +396,7 @@
           <div class="toolbar">
             <input id="discBaseUrl" class="input grow" placeholder="https://target  (base URL)" />
             <input id="discExt" class="input" style="width:170px" placeholder="exts: ,.php,/" title="Comma-separated. Empty = none" />
-            <input id="discConc" class="input" style="width:70px" type="number" min="1" max="100" value="15" title="Concurrency" />
+            <input id="discConc" class="input" style="width:70px" type="number" min="1" max="1000" value="15" title="Concurrency (1–1000)" />
             <button class="btn primary" id="discStartBtn">Start</button>
             <button class="btn" id="discStopBtn" disabled>Stop</button>
           </div>
