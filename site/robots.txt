@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://evilboyajay.github.io/proxyaudit/sitemap.xml

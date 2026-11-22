@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProxyAudit: free, open-source Burp Suite alternative with an AI security agent</title>
+<meta name="description" content="ProxyAudit is a free, open-source intercepting proxy for macOS. Proxy, Repeater, unthrottled Intruder, Sequencer, Decoder, Collaborator and a built-in Claude agent that audits endpoints and JavaScript for vulnerabilities.">
+<meta name="keywords" content="Burp Suite alternative, free Burp Suite, intercepting proxy, web security testing, bug bounty tools, penetration testing, MITM proxy, AI security scanner, OWASP ZAP alternative, Caido alternative">
+<link rel="canonical" href="https://evilboyajay.github.io/proxyaudit/">
+<meta name="theme-color" content="#EEF1F4">
+<link rel="icon" href="icon.png">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="ProxyAudit">
+<meta property="og:title" content="ProxyAudit: free Burp Suite alternative with an AI security agent">
+<meta property="og:description" content="Intercept, replay and fuzz HTTP traffic, then let a Claude agent audit every endpoint and JS file. Free and MIT-licensed.">
+<meta property="og:url" content="https://evilboyajay.github.io/proxyaudit/">
+<meta property="og:image" content="https://evilboyajay.github.io/proxyaudit/og.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ProxyAudit: free Burp Suite alternative with an AI security agent">
+<meta name="twitter:description" content="Intercept, replay and fuzz HTTP traffic, then let a Claude agent audit it. Free and open source.">
+<meta name="twitter:image" content="https://evilboyajay.github.io/proxyaudit/og.png">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "ProxyAudit",
+  "applicationCategory": "SecurityApplication",
+  "operatingSystem": "macOS 13 or later",
+  "description": "Free, open-source intercepting proxy for web security testing with a built-in Claude AI security agent. An alternative to Burp Suite.",
+  "url": "https://evilboyajay.github.io/proxyaudit/",
+  "downloadUrl": "https://github.com/evilboyajay/proxyaudit/releases/latest",
+  "codeRepository": "https://github.com/evilboyajay/proxyaudit",
+  "license": "https://opensource.org/licenses/MIT",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Person", "name": "evilboyajay", "url": "https://github.com/evilboyajay" }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    { "@type": "Question", "name": "Is ProxyAudit a free alternative to Burp Suite?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Yes. ProxyAudit is free and MIT-licensed. It covers the manual testing workflow of Burp Suite (Proxy, Repeater, Intruder, Sequencer, Decoder, Comparer, Collaborator and extensions) and adds an AI security agent. It does not have an active scanner yet." } },
+    { "@type": "Question", "name": "Is the Intruder rate-limited like Burp Suite Community Edition?",
+      "acceptedAnswer": { "@type": "Answer", "text": "No. ProxyAudit's Intruder is not throttled. It supports Sniper, Battering ram, Pitchfork and Cluster bomb attacks." } },
+    { "@type": "Question", "name": "Do I need an Anthropic API key for the AI features?",
+      "acceptedAnswer": { "@type": "Answer", "text": "No. If you have signed in to Claude Code with claude login, ProxyAudit uses that session. An ANTHROPIC_API_KEY also works. Everything except the AI features works without either." } },
+    { "@type": "Question", "name": "Does ProxyAudit run on Windows or Linux?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Not yet. ProxyAudit runs on macOS 13 or later. Windows and Linux builds are on the roadmap." } }
+  ]
+}
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
+
+<style>
+:root {
+  --paper: #EEF1F4;
+  --sheet: #FFFFFF;
+  --ink: #172033;
+  --muted: #56607A;
+  --rule: #C9D0DA;
+  --mark: #FFD44D;
+  --mark-ink: #172033;
+  --resp: #1F7A72;
+  --link: #2347B8;
+  --sans: "Schibsted Grotesk", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #151B28;
+    --sheet: #1D2536;
+    --ink: #E6EAF2;
+    --muted: #9AA4BA;
+    --rule: #33405A;
+    --mark: #E8B923;
+    --mark-ink: #151B28;
+    --resp: #5CC2B6;
+    --link: #8FA8FF;
+  }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 1.0625rem/1.6 var(--sans);
+}
+a { color: var(--link); text-underline-offset: 0.18em; }
+a:focus-visible, button:focus-visible, summary:focus-visible {
+  outline: 3px solid var(--link);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+/* Header */
+.top {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-block: 20px;
+}
+.brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; font-weight: 800; font-size: 1.125rem; }
+.brand img { width: 32px; height: 32px; }
+.top nav { display: flex; gap: 24px; font-size: 0.95rem; }
+.top nav a { color: var(--muted); text-decoration: none; }
+.top nav a:hover { color: var(--ink); }
+
+/* Hero */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  gap: 56px;
+  align-items: center;
+  padding-block: 56px 72px;
+}
+h1 {
+  font-size: clamp(2.25rem, 4.6vw, 3.5rem);
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  font-weight: 800;
+  margin: 0 0 20px;
+  max-width: 14ch;
+}
+.lede { font-size: 1.2rem; color: var(--muted); max-width: 34ch; margin: 0 0 32px; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.btn {
+  display: inline-block;
+  padding: 13px 22px;
+  border-radius: 8px;
+  font-weight: 700;
+  text-decoration: none;
+  font-size: 1rem;
+}
+.btn-primary { background: var(--ink); color: var(--paper); }
+.btn-primary:hover { background: color-mix(in srgb, var(--ink) 85%, var(--link)); }
+.btn-plain { color: var(--ink); border: 1.5px solid var(--rule); }
+.btn-plain:hover { border-color: var(--ink); }
+.fine { font-size: 0.875rem; color: var(--muted); margin: 14px 0 0; }
+
+/* The intercepted request: the page's one loud element */
+.capture {
+  margin: 0;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  font: 400 0.9rem/1.7 var(--mono);
+  overflow: hidden;
+}
+.capture-bar {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--rule);
+  font: 500 0.8rem/1.4 var(--sans);
+  color: var(--muted);
+}
+.capture-bar strong { color: var(--ink); font-weight: 700; }
+.capture pre { margin: 0; padding: 16px; white-space: pre-wrap; word-break: break-word; }
+.capture .resp { color: var(--resp); }
+mark {
+  background: var(--mark);
+  color: var(--mark-ink);
+  padding: 1px 3px;
+  border-radius: 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.note {
+  margin: 0 16px 16px;
+  padding: 12px 14px;
+  border-left: 4px solid var(--mark);
+  background: color-mix(in srgb, var(--mark) 14%, var(--sheet));
+  font: 400 0.92rem/1.5 var(--sans);
+}
+.note b { font-weight: 700; }
+
+@media (prefers-reduced-motion: no-preference) {
+  mark { background-size: 0 100%; background-repeat: no-repeat;
+         background-image: linear-gradient(var(--mark), var(--mark));
+         background-color: transparent;
+         animation: swipe 0.6s 0.5s ease-out forwards; }
+  mark.m2 { animation-delay: 0.9s; }
+  .note { opacity: 0; animation: show 0.4s 1.4s ease-out forwards; }
+  @keyframes swipe { to { background-size: 100% 100%; } }
+  @keyframes show { to { opacity: 1; } }
+}
+
+/* Sections */
+section { padding-block: 72px; border-top: 1px solid var(--rule); }
+h2 {
+  font-size: clamp(1.6rem, 3vw, 2.25rem);
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  font-weight: 800;
+  margin: 0 0 16px;
+  max-width: 24ch;
+}
+.intro { color: var(--muted); max-width: 60ch; margin: 0 0 40px; }
+
+.demo video {
+  width: 100%; height: auto; display: block;
+  border: 1px solid var(--rule); border-radius: 10px;
+  background: var(--sheet);
+}
+
+/* Tool list: name on the left, purpose on the right */
+.tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 56px; margin: 0; }
+.tools div { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--rule); }
+.tools dt { font-weight: 700; }
+.tools dd { margin: 0; color: var(--muted); }
+
+/* Agent */
+.agent { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; align-items: start; }
+.agent ul { margin: 0; padding-left: 1.1em; max-width: 52ch; }
+.agent li { margin-bottom: 12px; }
+.prompts { display: grid; gap: 10px; }
+.prompts p {
+  margin: 0; padding: 14px 16px;
+  background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px;
+  font-size: 1rem;
+}
+.prompts p::before { content: "You: "; color: var(--muted); }
+
+/* Install steps: a real sequence */
+.steps { list-style: none; counter-reset: s; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; }
+.steps li { counter-increment: s; }
+.steps li::before {
+  content: counter(s);
+  display: inline-grid; place-items: center;
+  width: 2rem; height: 2rem; margin-bottom: 12px;
+  border-radius: 50%; border: 1.5px solid var(--ink);
+  font-weight: 700;
+}
+.steps h3 { margin: 0 0 6px; font-size: 1.1rem; }
+.steps p { margin: 0; color: var(--muted); }
+code { font: 400 0.88em var(--mono); background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; padding: 1px 5px; overflow-wrap: anywhere; }
+
+/* FAQ */
+.faq details { border-bottom: 1px solid var(--rule); max-width: 760px; }
+.faq summary { cursor: pointer; padding: 18px 0; font-weight: 700; font-size: 1.1rem; list-style-position: outside; }
+.faq details p { margin: 0 0 18px; color: var(--muted); max-width: 64ch; }
+
+footer { border-top: 1px solid var(--rule); padding-block: 32px 48px; color: var(--muted); font-size: 0.9rem; }
+footer p { margin: 0 0 8px; max-width: 70ch; }
+
+@media (max-width: 860px) {
+  .hero, .agent { grid-template-columns: minmax(0, 1fr); gap: 40px; }
+  .hero { padding-block: 32px 56px; }
+  .tools { grid-template-columns: minmax(0, 1fr); }
+  .steps { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 520px) {
+  .wrap { padding: 0 16px; }
+  .top nav a:not(.gh) { display: none; }
+  .tools div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .capture { font-size: 0.8rem; }
+  section { padding-block: 56px; }
+}
+</style>
+</head>
+<body>
+
+<header class="wrap top">
+  <a class="brand" href="./"><img src="icon.png" alt="" width="32" height="32">ProxyAudit</a>
+  <nav aria-label="Main">
+    <a href="#tools">Tools</a>
+    <a href="#agent">AI agent</a>
+    <a href="#faq">FAQ</a>
+    <a class="gh" href="https://github.com/evilboyajay/proxyaudit">GitHub</a>
+  </nav>
+</header>
+
+<main>
+  <div class="wrap hero">
+    <div>
+      <h1>The free Burp Suite alternative with an AI agent built in</h1>
+      <p class="lede">Intercept, replay and fuzz HTTP traffic on your Mac. Then ask Claude to audit what you captured.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="https://github.com/evilboyajay/proxyaudit/releases/latest">Download for macOS</a>
+        <a class="btn btn-plain" href="https://github.com/evilboyajay/proxyaudit">View source on GitHub</a>
+      </div>
+      <p class="fine">Free and MIT-licensed. macOS 13 or later, Apple Silicon and Intel.</p>
+    </div>
+
+    <figure class="capture" aria-label="Example: ProxyAudit's agent flags an IDOR in a captured request">
+      <div class="capture-bar"><span><strong>Repeater</strong> · api.example.test</span><span>200 OK · 182 ms</span></div>
+<pre>GET /api/v2/users/<mark>1043</mark>/invoices HTTP/1.1
+Host: api.example.test
+Authorization: Bearer eyJhbGciOi…<span class="resp">
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"owner":"<mark class="m2">dana@example.test</mark>","total":4120}</span></pre>
+      <p class="note"><b>Agent:</b> Possible IDOR. Your token belongs to user 1042, but changing the ID to 1043 returns another customer's invoices.</p>
+    </figure>
+  </div>
+
+  <section class="demo" aria-labelledby="demo-h">
+    <div class="wrap">
+      <h2 id="demo-h">See it find a bug in under two minutes</h2>
+      <p class="intro">Capture traffic, spot an IDOR in Repeater, catch a blind SSRF with Collaborator, then let the agent write and run a proof of concept.</p>
+      <video controls preload="none" poster="poster.jpg" width="1400" height="900" playsinline>
+        <source src="proxyaudit-demo.mp4" type="video/mp4">
+        <a href="https://github.com/evilboyajay/proxyaudit/blob/main/docs/proxyaudit-demo.mp4">Watch the demo on GitHub</a>.
+      </video>
+    </div>
+  </section>
+
+  <section id="tools" aria-labelledby="tools-h">
+    <div class="wrap">
+      <h2 id="tools-h">Everything you use Burp for, without the paywall</h2>
+      <p class="intro">The familiar manual-testing toolkit, with nothing throttled or locked behind a license key.</p>
+      <dl class="tools">
+        <div><dt>Proxy</dt><dd>HTTP/HTTPS interception with its own CA, full history, filtering and HAR export.</dd></div>
+        <div><dt>Intercept</dt><dd>Hold requests in flight, edit them, then forward or drop.</dd></div>
+        <div><dt>Repeater</dt><dd>Edit and resend any request in as many tabs as you need.</dd></div>
+        <div><dt>Intruder</dt><dd>Sniper, Battering ram, Pitchfork and Cluster bomb, with no speed limit.</dd></div>
+        <div><dt>Collaborator</dt><dd>Catch out-of-band callbacks for blind SSRF, XSS and XXE.</dd></div>
+        <div><dt>Sequencer</dt><dd>Measure how random your session tokens really are.</dd></div>
+        <div><dt>Decoder</dt><dd>Base64, URL, HTML, hex, gzip and JWT, stacked or smart-decoded.</dd></div>
+        <div><dt>Comparer</dt><dd>Line- or word-level diff of any two requests or responses.</dd></div>
+        <div><dt>Site map</dt><dd>A host and path tree built from your traffic, with scope rules.</dd></div>
+        <div><dt>WebSockets</dt><dd>Live capture of every connection and frame.</dd></div>
+        <div><dt>Plugins</dt><dd>JavaScript plugins that hook traffic and can call Claude.</dd></div>
+        <div><dt>Mobile</dt><dd>Route iOS and Android traffic through your Mac over Wi-Fi.</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <section id="agent" aria-labelledby="agent-h">
+    <div class="wrap agent">
+      <div>
+        <h2 id="agent-h">An agent that reads your traffic with you</h2>
+        <ul>
+          <li><strong>Audit an endpoint or a JS file</strong> with one click. It looks for IDOR, injection, broken auth, leaked secrets and dangerous sinks.</li>
+          <li><strong>Ask in plain English.</strong> The agent reads your history, replays requests and writes up what it finds.</li>
+          <li><strong>Split big targets</strong> across parallel recon and audit subagents.</li>
+          <li><strong>Use your existing Claude login.</strong> No separate API key is needed.</li>
+        </ul>
+      </div>
+      <div class="prompts" aria-label="Example questions for the agent">
+        <p>Map the attack surface of api.example.test</p>
+        <p>Check every captured JS file for hard-coded keys</p>
+        <p>Write a PoC for the IDOR on /users/{id}</p>
+        <p>Which of these endpoints skip the auth header?</p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="start-h">
+    <div class="wrap">
+      <h2 id="start-h">Start testing in three steps</h2>
+      <ol class="steps">
+        <li><h3>Install</h3><p><a href="https://github.com/evilboyajay/proxyaudit/releases/latest">Download the DMG</a> and drag ProxyAudit to Applications.</p></li>
+        <li><h3>Open a browser</h3><p>Click <strong>Open browser</strong>. It's already set up to use the proxy and trust its certificate.</p></li>
+        <li><h3>Browse your target</h3><p>Traffic appears in Proxy. Send anything to Repeater, Intruder or the agent.</p></li>
+      </ol>
+      <p class="fine">The app isn't notarized yet. On first launch, open System Settings → Privacy &amp; Security and click Open Anyway.</p>
+    </div>
+  </section>
+
+  <section id="faq" class="faq" aria-labelledby="faq-h">
+    <div class="wrap">
+      <h2 id="faq-h">Questions</h2>
+      <details>
+        <summary>Is ProxyAudit really a free alternative to Burp Suite?</summary>
+        <p>Yes. It's MIT-licensed and covers the manual testing workflow: Proxy, Repeater, Intruder, Sequencer, Decoder, Comparer, Collaborator and extensions. It doesn't have an active scanner yet.</p>
+      </details>
+      <details>
+        <summary>Is Intruder rate-limited like in Burp Community Edition?</summary>
+        <p>No. Intruder runs as fast as your target and network allow.</p>
+      </details>
+      <details>
+        <summary>Do I need an Anthropic API key?</summary>
+        <p>No. If you've signed in to Claude Code with <code>claude login</code>, ProxyAudit uses that session. An <code>ANTHROPIC_API_KEY</code> also works. Everything except the AI features works without either.</p>
+      </details>
+      <details>
+        <summary>Does it run on Windows or Linux?</summary>
+        <p>Not yet. It runs on macOS 13 or later. Windows and Linux builds are on the <a href="https://github.com/evilboyajay/proxyaudit#roadmap">roadmap</a>, and contributions are welcome.</p>
+      </details>
+      <details>
+        <summary>Can I test any website with it?</summary>
+        <p>Only systems you own or have written permission to test. Intercepting other people's traffic may be illegal where you live.</p>
+      </details>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap">
+  <p><a href="https://github.com/evilboyajay/proxyaudit">Source on GitHub</a> · <a href="https://github.com/evilboyajay/proxyaudit/releases">Releases</a> · <a href="https://github.com/evilboyajay/proxyaudit/issues">Report a bug</a></p>
+  <p>ProxyAudit is MIT-licensed. Burp Suite is a trademark of PortSwigger Ltd. ProxyAudit is an independent project and is not affiliated with PortSwigger.</p>
+</footer>
+
+</body>
+</html>

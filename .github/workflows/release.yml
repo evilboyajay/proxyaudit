@@ -1,0 +1,69 @@
+name: Release
+
+# Builds the macOS DMGs and publishes a GitHub release on every push to main.
+# Website, docs and Markdown-only pushes don't cut a release.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'site/**'
+      - 'docs/**'
+      - '**/*.md'
+      - 'LICENSE'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Pick version
+        id: ver
+        run: node .github/scripts/next-version.js >> "$GITHUB_OUTPUT"
+
+      - name: Set version
+        run: npm version "${{ steps.ver.outputs.version }}" --no-git-tag-version --allow-same-version
+
+      - run: npm ci
+
+      - name: QA
+        run: npm run qa
+
+      - name: Build DMGs
+        run: npm run dist -- --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Checksums
+        working-directory: dist
+        run: shasum -a 256 ProxyAudit-*.dmg | tee SHA256SUMS.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          PREVIOUS: ${{ steps.ver.outputs.previous }}
+        run: |
+          node .github/scripts/release-notes.js "$VERSION" "$PREVIOUS" dist/SHA256SUMS.txt > notes.md
+          gh release create "v$VERSION" \
+            --target "$GITHUB_SHA" \
+            --title "ProxyAudit v$VERSION" \
+            --notes-file notes.md \
+            --latest \
+            dist/ProxyAudit-*.dmg dist/SHA256SUMS.txt

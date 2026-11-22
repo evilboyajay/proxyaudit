@@ -1,0 +1,26 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@500;800&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;width:1280px;height:640px;background:#EEF1F4;color:#172033;font-family:"Schibsted Grotesk",sans-serif}
+.c{display:grid;grid-template-columns:560px 1fr;gap:56px;align-items:center;height:100%;padding:0 72px;box-sizing:border-box}
+.b{display:flex;align-items:center;gap:14px;font-weight:800;font-size:34px;margin-bottom:36px}
+.b img{width:56px;height:56px}
+h1{font-size:62px;line-height:1.04;letter-spacing:-.025em;margin:0 0 24px;font-weight:800}
+p{font-size:26px;color:#56607A;margin:0;font-weight:500}
+.cap{background:#fff;border:1px solid #C9D0DA;border-radius:14px;font:400 21px/1.7 "IBM Plex Mono",monospace;overflow:hidden}
+pre{margin:0;padding:22px;white-space:pre-wrap}
+.r{color:#1F7A72}
+mark{background:#FFD44D;color:#172033;padding:1px 4px;border-radius:3px}
+.n{margin:0 22px 22px;padding:14px 16px;border-left:5px solid #FFD44D;background:#FFF8DC;font:500 20px/1.45 "Schibsted Grotesk",sans-serif;color:#172033}
+</style></head><body><div class="c">
+<div><div class="b"><img src="../icon.png">ProxyAudit</div>
+<h1>The free Burp Suite alternative with an AI agent</h1>
+<p>Open source · macOS · MIT</p></div>
+<div class="cap"><pre>GET /api/v2/users/<mark>1043</mark>/invoices
+Host: api.example.test
+<span class="r">
+HTTP/1.1 200 OK
+{"owner":"<mark>dana@example.test</mark>"}</span></pre>
+<div class="n"><b>Agent:</b> Possible IDOR. Your token is user 1042, but ID 1043 returns another customer's invoices.</div></div>
+</div></body></html>
