@@ -2,7 +2,7 @@
 
 const http = require('http');
 const https = require('https');
-const zlib = require('zlib');
+const { decodeBody } = require('./decode');
 const { URL } = require('url');
 
 /**
@@ -53,15 +53,10 @@ function sendRequest(spec) {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
-        let raw = Buffer.concat(chunks);
-        const enc = (res.headers['content-encoding'] || '').toLowerCase();
-        try {
-          if (enc === 'gzip') raw = zlib.gunzipSync(raw);
-          else if (enc === 'deflate') raw = zlib.inflateSync(raw);
-          else if (enc === 'br') raw = zlib.brotliDecompressSync(raw);
-        } catch (_) {
-          /* leave raw as-is if decompression fails */
-        }
+        const raw = decodeBody(
+          Buffer.concat(chunks),
+          res.headers['content-encoding']
+        ).body;
         resolve({
           status: res.statusCode,
           statusMessage: res.statusMessage,

@@ -5,9 +5,9 @@ const net = require('net');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const zlib = require('zlib');
 const Proxy = require('http-mitm-proxy').Proxy;
 const { MatchReplace } = require('../matchreplace');
+const { decodeBody } = require('./decode');
 
 const MAX_BODY_CAPTURE = 5 * 1024 * 1024; // 5 MB cap per body
 
@@ -360,14 +360,18 @@ class ProxyEngine extends EventEmitter {
       return cb(null, chunk);
     });
     ctx.onRequestEnd((c, cb) => {
-      flow.request.body = Buffer.concat(reqChunks).toString('utf8');
+      const { body } = decodeBody(
+        Buffer.concat(reqChunks),
+        creq.headers['content-encoding']
+      );
+      flow.request.body = body.toString('utf8');
       return cb();
     });
 
-    // Capture response, decompressing gzip/deflate/br for display.
+    // Capture response. The client receives the server's bytes untouched;
+    // the recorded copy is decompressed (gzip/deflate/br/zstd) for display.
     const resChunks = [];
     let resLen = 0;
-    ctx.use(Proxy.gunzip);
     ctx.onResponse((c, cb) => {
       const sres = c.serverToProxyResponse;
       flow.response = {
@@ -391,7 +395,13 @@ class ProxyEngine extends EventEmitter {
     });
     ctx.onResponseEnd((c, cb) => {
       if (flow.response) {
-        flow.response.body = Buffer.concat(resChunks).toString('utf8');
+        const dec = decodeBody(
+          Buffer.concat(resChunks),
+          flow.response.headers['content-encoding']
+        );
+        if (dec.decoded) flow.response.decodedFrom = dec.encoding;
+        else if (dec.error) this.emit('error', `decode ${flow.url}: ${dec.error}`);
+        flow.response.body = dec.body.toString('utf8');
         flow.response.length = resLen;
         // --- Match & Replace (response) ----------------------------------
         // Note: the body was already streamed to the client chunk-by-chunk,
