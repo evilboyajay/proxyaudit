@@ -173,7 +173,7 @@ try {
 } catch (_) { /* ignore */ }
 
 // Load the helper scripts (transforms/diff/sitemap) exactly as index.html does.
-for (const dep of ['transforms.js', 'diff.js', 'sitemap.js', 'msgview.js', 'targetview.js', 'httpfilter.js', 'ctxmenu.js']) {
+for (const dep of ['transforms.js', 'diff.js', 'sitemap.js', 'httpcolor.js', 'searchbar.js', 'codeeditor.js', 'msgview.js', 'targetview.js', 'httpfilter.js', 'ctxmenu.js']) {
   try {
     window.eval(fs.readFileSync(path.join(ROOT, dep), 'utf8'));
   } catch (e) {
@@ -671,6 +671,81 @@ function goto(view) {
   click($('#clearFlowsBtn'));
   await wait(5);
   check('proxy: clear empties table', window.document.querySelectorAll('#flowBody tr').length === 0, 'rows remain');
+
+  // 24) Burp-style message editors: search, colouring, line numbers
+  {
+    const barIn = (el) => el.closest('.ms-wrap, .mv-wrap, .ce-wrap').querySelector('.ms-bar');
+    const typeIn = (bar, v) => {
+      const inp = bar.querySelector('.ms-input');
+      inp.value = v;
+      inp.dispatchEvent(new window.Event('input', { bubbles: true }));
+    };
+    const setOpt = (bar, k, on) => {
+      const cb = bar.querySelector(`.ms-menu input[data-o="${k}"]`);
+      cb.checked = on;
+      cb.dispatchEvent(new window.Event('change', { bubbles: true }));
+    };
+    const count = (bar) => bar.querySelector('.ms-count').textContent;
+    goto('repeater');
+    const resp = $('#repResponse').querySelector('.mv-body');
+    const rbar = barIn(resp);
+    check('search: repeater response has a Burp-style bar', !!rbar && !!rbar.querySelector('.ms-gear') && /highlights/.test(count(rbar)), 'no bar');
+    resp.textContent = 'HTTP 200 OK\ncontent-type: application/json\n\n{"token":"abc","Token2":"TOKEN"}';
+    await wait(5);
+    typeIn(rbar, 'token');
+    const hits = resp.querySelectorAll('mark.ms-hit');
+    check('search: highlights all case-insensitive matches', hits.length === 3 && resp.querySelectorAll('mark.ms-cur').length === 1, `hits=${hits.length}`);
+    check('search: count label', count(rbar) === '3 highlights', count(rbar));
+    rbar.querySelector('.ms-next').click();
+    check('search: next moves current match', resp.querySelector('mark.ms-cur').dataset.hit === '1', resp.querySelector('mark.ms-cur').dataset.hit);
+    check('search: text unchanged by highlighting', resp.textContent.endsWith('{"token":"abc","Token2":"TOKEN"}'), resp.textContent);
+    setOpt(rbar, 'case', true);
+    check('search: case-sensitive option (gear menu)', resp.querySelectorAll('mark.ms-hit').length === 1, String(resp.querySelectorAll('mark.ms-hit').length));
+    setOpt(rbar, 'case', false);
+    resp.textContent = 'HTTP 500\n\ntoken token';
+    await wait(5);
+    check('search: re-highlights when the response changes', resp.querySelectorAll('mark.ms-hit').length === 2, String(resp.querySelectorAll('mark.ms-hit').length));
+    setOpt(rbar, 'regex', true);
+    typeIn(rbar, 'to+k');
+    check('search: regex option', resp.querySelectorAll('mark.ms-hit').length === 2, String(resp.querySelectorAll('mark.ms-hit').length));
+    typeIn(rbar, '([');
+    check('search: invalid regex reported', /Invalid regex/.test(count(rbar)), count(rbar));
+    setOpt(rbar, 'regex', false);
+    typeIn(rbar, '');
+    check('search: clearing removes marks', !resp.querySelector('mark'), 'marks remain');
+
+    // Proxy-style viewer: numbered + coloured rows
+    const mv = window.MsgView.mount(window.document.createElement('div'));
+    mv.setMessage('HTTP/2 200 OK\nSet-Cookie: sid=abc; Path=/\nContent-Type: application/json\n\n{"a":1}');
+    const vb = mv.search.target;
+    check('viewer: one numbered row per line', vb.querySelectorAll('.ln-row').length === 7, String(vb.querySelectorAll('.ln-row').length));
+    check('viewer: header names / cookie values / JSON keys coloured', !!vb.querySelector('.tk-hname') && vb.querySelector('.tk-pval').textContent === 'abc' && !!vb.querySelector('.tk-key'), vb.innerHTML.slice(0, 300));
+    mv.setMode('raw');
+    check('viewer: raw mode also numbered + coloured', vb.querySelectorAll('.ln-row').length === 5 && !!vb.querySelector('.tk-status'), vb.innerHTML.slice(0, 200));
+    mv.search.setTerm('sid');
+    check('viewer: search across coloured rows', vb.querySelectorAll('mark.ms-hit').length === 1, vb.innerHTML.slice(0, 300));
+    mv.destroy();
+
+    // Editable request: textarea + coloured, numbered overlay
+    const reqTa = $('#repRequest');
+    const qbar = barIn(reqTa);
+    const back = reqTa.parentNode.querySelector('.ce-back');
+    reqTa.value = 'Cookie: sid=1\nX-Sid: 2\n\nq=§x§';
+    await wait(40);
+    check('editor: overlay has a numbered line per textarea line', back && back.querySelectorAll('.ce-line').length === 4, back ? back.innerHTML : 'no overlay');
+    check('editor: overlay text matches textarea', back.textContent === reqTa.value.replace(/\n/g, ''), back.textContent);
+    check('editor: headers + § positions coloured', !!back.querySelector('.tk-hname') && !!back.querySelector('.tk-pos'), back.innerHTML);
+    typeIn(qbar, 'sid');
+    check('editor: search highlights in overlay', back.querySelectorAll('mark.ms-hit').length === 2 && count(qbar) === '2 highlights', back.innerHTML);
+    reqTa.value = 'sid sid sid';
+    await wait(40);
+    check('editor: programmatic value change re-highlights', back.querySelectorAll('mark.ms-hit').length === 3, back.innerHTML);
+    typeIn(qbar, '');
+
+    goto('proxy');
+    check('search: proxy message viewer has a search bar', !!$('#reqView').querySelector('.ms-bar'), 'no bar');
+    check('search: intruder result panes use message viewers', !!$('#intrResRaw').querySelector('.ms-bar') && $('#intrResRaw').classList.contains('hidden'), 'missing');
+  }
 
   // ---- report ----
   const pass = results.filter((r) => r.ok).length;

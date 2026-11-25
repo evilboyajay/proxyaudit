@@ -199,7 +199,7 @@
               <label class="field-label">
                 Response <span id="repMeta" class="muted"></span>
               </label>
-              <pre class="raw" id="repResponse">No response yet.</pre>
+              <div id="repResponse" class="mv-wrap"></div>
             </div>
           </div>
         </section>
@@ -297,8 +297,8 @@
                   </div>
                   <span id="intrDetailMeta" class="muted"></span>
                 </div>
-                <pre class="raw" id="intrReqRaw">Select a result row to inspect.</pre>
-                <pre class="raw hidden" id="intrResRaw"></pre>
+                <div id="intrReqRaw" class="mv-wrap"></div>
+                <div id="intrResRaw" class="mv-wrap hidden"></div>
               </div>
             </div>
           </div>
@@ -757,6 +757,9 @@ Requires cloudflared:  brew install cloudflared</pre>
     <script src="transforms.js"></script>
     <script src="diff.js"></script>
     <script src="sitemap.js"></script>
+    <script src="httpcolor.js"></script>
+    <script src="searchbar.js"></script>
+    <script src="codeeditor.js"></script>
     <script src="msgview.js"></script>
     <script src="targetview.js"></script>
     <script src="httpfilter.js"></script>

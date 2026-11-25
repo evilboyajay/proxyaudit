@@ -656,3 +656,98 @@ thead th.sorted { color: var(--accent); }
 /* ---------- danger button (Send → Stop) ---------- */
 .btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
 .btn.danger:hover { background: #a82e2e; }
+
+/* ---------- Burp-style HTTP syntax colours (httpcolor.js) ---------- */
+.tk-hname, .tk-pname, .tk-tag, .tk-aval, .tk-key { color: #1d4fbf; }
+.tk-pval, .tk-attr, .tk-str { color: #b4232a; }
+.tk-num { color: #0b7a55; }
+.tk-bool, .tk-null { color: #8250df; }
+.tk-doctype { color: #2f7d32; }
+.tk-comment { color: #8b949e; }
+.tk-status { color: var(--fg); }
+.tk-pos { background: #fde1c2; color: #a3480b; border-radius: 2px; }
+
+/* ---------- numbered message view (MsgView Pretty / Raw) ---------- */
+.mv-body.mv-ln { padding: 0; }
+.ln-view {
+  --gw: calc(var(--ln-digits, 1) * 1ch + 20px);
+  min-height: 100%; padding: 8px 12px 8px calc(var(--gw) + 10px); counter-reset: ln;
+  background: linear-gradient(90deg, var(--bg-2) var(--gw), var(--line) var(--gw),
+    var(--line) calc(var(--gw) + 1px), transparent calc(var(--gw) + 1px));
+}
+.ln-row, .ce-line {
+  counter-increment: ln; position: relative; min-height: 1.5em;
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal;
+}
+.ln-row::before, .ce-line::before {
+  content: counter(ln); position: absolute; right: calc(100% + 16px); top: 0;
+  color: var(--muted); user-select: none; pointer-events: none; text-align: right;
+}
+.ln-nl { display: none; }
+
+/* ---------- CodeEditor (textarea + coloured, numbered overlay) ---------- */
+.ce-wrap {
+  flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--bg);
+}
+.ce-wrap:focus-within { border-color: var(--accent-2); box-shadow: 0 0 0 3px rgba(47,116,192,.15); }
+.ce-field {
+  --gw: calc(var(--ln-digits, 1) * 1ch + 20px);
+  flex: 1; position: relative; min-height: 0;
+  font-family: var(--mono); font-size: 12px; line-height: 1.5;
+}
+.ce-back, .ce-field > textarea.ce-ta {
+  font-family: var(--mono); font-size: 12px; line-height: 1.5; letter-spacing: 0; tab-size: 8;
+  padding: 8px 12px 8px calc(var(--gw) + 10px); box-sizing: border-box;
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal;
+}
+.ce-back {
+  position: absolute; top: 0; left: 0; bottom: 0; right: 0; overflow: hidden;
+  color: var(--fg); pointer-events: none; counter-reset: ln;
+  background: linear-gradient(90deg, var(--bg-2) var(--gw), var(--line) var(--gw),
+    var(--line) calc(var(--gw) + 1px), var(--bg) calc(var(--gw) + 1px));
+}
+.ce-lines { counter-reset: ln; }
+.ce-field > textarea.ce-ta {
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; z-index: 1;
+  border: 0; border-radius: 0; background: transparent; color: transparent;
+  caret-color: var(--fg); resize: none; outline: none; box-shadow: none;
+}
+.ce-field > textarea.ce-ta:focus { box-shadow: none; border: 0; }
+.ce-field > textarea.ce-ta::selection { background: rgba(47,116,192,.28); color: transparent; }
+.ce-field > textarea.ce-ta::placeholder { color: var(--muted); }
+
+/* ---------- MsgSearch (Burp-style message editor search bar) ---------- */
+.ms-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.ms-wrap > .raw, .ms-wrap > div { flex: 1; min-height: 0; }
+mark.ms-hit { background: #fde68a; color: inherit; border-radius: 2px; }
+mark.ms-hit.ms-cur { background: #f59e0b; box-shadow: 0 0 0 1px #d97706; }
+.ms-bar {
+  position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: 4px;
+  padding: 5px 8px; border-top: 1px solid var(--line); background: var(--bg-2);
+}
+.ms-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg); border: 1px solid var(--line); color: var(--fg-dim); cursor: pointer;
+  width: 24px; height: 22px; padding: 0; border-radius: 4px; font-size: 13px; line-height: 1;
+}
+.ms-btn:hover { background: var(--bg-3); color: var(--fg); }
+.ms-bar.ms-has-opts .ms-gear { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.ms-input {
+  flex: 1; min-width: 60px; height: 22px; padding: 0 7px; border: 1px solid var(--line);
+  border-radius: 4px; background: var(--bg); color: var(--fg); font-family: var(--ui); font-size: 12px;
+}
+.ms-input:focus { outline: none; border-color: var(--accent-2); box-shadow: 0 0 0 2px rgba(47,116,192,.15); }
+.ms-input.ms-bad, .ms-bar.ms-none .ms-input { border-color: var(--red); background: #fdf0f0; }
+.ms-count { font-size: 12px; color: var(--fg-dim); min-width: 84px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ms-bar.ms-none .ms-count { color: var(--red); }
+.ms-menu {
+  position: absolute; bottom: calc(100% + 4px); left: 6px; z-index: 20; padding: 4px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px; box-shadow: var(--shadow-lg);
+}
+.ms-menu-item { display: flex; align-items: center; gap: 7px; padding: 5px 8px; font-size: 12px; color: var(--fg); white-space: nowrap; cursor: pointer; border-radius: 4px; }
+.ms-menu-item:hover { background: var(--bg-3); }
+
+/* Programming ligatures (JetBrains Mono turns <!-- and -> into arrows)
+   misrepresent raw HTTP; show every character as typed. */
+.raw, .code-area, .mv-body, .ce-back, .ce-ta, .ms-input { font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }

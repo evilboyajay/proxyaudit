@@ -9,6 +9,7 @@
  *   ctl.setMessage(rawHttpString);   // "METHOD path HTTP/1.1\n<headers>\n\n<body>"
  *   ctl.setMode('pretty' | 'raw' | 'hex');
  *   ctl.destroy();
+ *   ctl.search                       // MsgSearch instance (needs searchbar.js)
  *
  * Also exported:
  *   MsgView.prettyJson(str)  -> highlighted HTML string (spans with .j-* classes)
@@ -41,7 +42,7 @@
       const c = line.indexOf(':');
       if (c > 0) headers[line.slice(0, c).trim()] = line.slice(c + 1).trim();
     }
-    return { startLine, headers, body, headPart };
+    return { startLine, headers, body, headPart, raw: text };
   }
 
   function contentTypeOf(headers) {
@@ -225,59 +226,57 @@
   }
 
   // --------------------------- rendering --------------------------
-  function headerBlockHtml(parsed) {
-    const head = parsed.headPart || '';
-    if (!head) return '';
-    return '<div class="mv-headers">' + esc(head) + '</div>';
-  }
-
-  function renderPretty(parsed) {
+  // Pretty = the message with its body reformatted (JSON indented, markup
+  // reflowed, GraphQL laid out). Returns the text plus the body grammar to
+  // colour it with (undefined = auto-detect).
+  function prettyText(parsed) {
     const ct = contentTypeOf(parsed.headers);
     const body = parsed.body || '';
     const trimmed = body.trim();
-    const headersHtml = headerBlockHtml(parsed);
-
-    // JSON (by content-type or by shape)
-    if (ct.indexOf('json') >= 0 || looksJson(body)) {
-      // GraphQL carried over JSON: has a "query" string field.
-      let graphqlInJson = false;
-      let parsedJson = null;
+    let out = body;
+    let bodyKind;
+    if (trimmed && (ct.indexOf('json') >= 0 || looksJson(body))) {
+      let obj = null;
       try {
-        parsedJson = JSON.parse(trimmed);
-        if (parsedJson && typeof parsedJson === 'object' && typeof parsedJson.query === 'string') {
-          graphqlInJson = true;
-        }
+        obj = JSON.parse(trimmed);
       } catch (e) {
-        parsedJson = null;
+        obj = undefined;
       }
-      if (graphqlInJson) {
-        let html = headersHtml;
-        html += '<div class="mv-sub">GraphQL query</div>';
-        html += '<div class="mv-gql">' + esc(prettyGraphql(parsedJson.query)) + '</div>';
-        if (parsedJson.variables !== undefined) {
-          html += '<div class="mv-sub">Variables</div>';
-          html += '<div class="mv-json">' +
-            highlightJsonValue(JSON.stringify(parsedJson.variables, null, 2)) + '</div>';
+      if (obj && typeof obj === 'object' && typeof obj.query === 'string') {
+        // GraphQL carried over JSON: show the query laid out, then variables.
+        out = prettyGraphql(obj.query);
+        if (obj.variables !== undefined) {
+          out += '\n\n# variables\n' + JSON.stringify(obj.variables, null, 2);
         }
-        return html;
+        bodyKind = 'plain';
+      } else if (obj !== undefined) {
+        out = JSON.stringify(obj, null, 2);
+        bodyKind = 'json';
       }
-      return headersHtml + '<div class="mv-json">' + prettyJson(trimmed) + '</div>';
+    } else if (ct.indexOf('graphql') >= 0 || /^(query|mutation|subscription|fragment)\b/.test(trimmed)) {
+      out = prettyGraphql(body);
+      bodyKind = 'plain';
+    } else if (ct.indexOf('html') >= 0 || ct.indexOf('xml') >= 0 || /^<(\?xml|!doctype|html\b)/i.test(trimmed)) {
+      out = prettyMarkup(body);
+      bodyKind = 'markup';
     }
+    const head = parsed.headPart || '';
+    return { text: head + (out || /\n\n/.test(parsed.raw || '') ? '\n\n' + out : ''), bodyKind };
+  }
 
-    // Raw GraphQL body
-    if (ct.indexOf('graphql') >= 0 ||
-        /^(query|mutation|subscription|fragment)\b/.test(trimmed)) {
-      return headersHtml + '<div class="mv-gql">' + esc(prettyGraphql(body)) + '</div>';
-    }
-
-    // HTML / XML
-    if (ct.indexOf('html') >= 0 || ct.indexOf('xml') >= 0 ||
-        /^<(\?xml|!doctype|html\b)/i.test(trimmed)) {
-      return headersHtml + '<div class="mv-markup">' + esc(prettyMarkup(body)) + '</div>';
-    }
-
-    // else: raw body verbatim
-    return headersHtml + '<div class="mv-plain">' + esc(body) + '</div>';
+  // Burp-style numbered, coloured rows. Numbers come from a CSS counter so
+  // they are never part of the text (search / copy see only the message).
+  // Each row ends with a hidden "\n" so textContent keeps line breaks.
+  function linesHtml(text, bodyKind) {
+    const lines = window.HttpColor
+      ? window.HttpColor.toLines(window.HttpColor.tokenize(text, { bodyKind }))
+      : String(text).replace(/\r\n/g, '\n').split('\n').map(esc);
+    const digits = String(lines.length).length;
+    return (
+      `<div class="ln-view" style="--ln-digits:${digits}">` +
+      lines.map((l) => `<div class="ln-row">${l}<span class="ln-nl">\n</span></div>`).join('') +
+      '</div>'
+    );
   }
 
   // ----------------------------- mount ----------------------------
@@ -319,14 +318,15 @@
     function render() {
       const parsed = parseMessage(currentRaw);
       if (mode === 'raw') {
-        body.className = 'mv-body raw';
-        body.textContent = currentRaw;
+        body.className = 'mv-body mv-ln';
+        body.innerHTML = linesHtml(currentRaw);
       } else if (mode === 'hex') {
         body.className = 'mv-body raw mv-hex';
         body.textContent = hexDump(parsed.body);
       } else {
-        body.className = 'mv-body mv-pretty';
-        body.innerHTML = renderPretty(parsed);
+        const p = prettyText(parsed);
+        body.className = 'mv-body mv-ln mv-pretty';
+        body.innerHTML = linesHtml(p.text, p.bodyKind);
       }
       MODES.forEach((m) => tabEls[m].classList.toggle('active', m === mode));
     }
@@ -341,13 +341,17 @@
       render();
     }
     function destroy() {
+      if (search) search.destroy();
       tabs.removeEventListener('click', onTabClick);
       containerEl.textContent = '';
       containerEl.classList.remove('mv-wrap');
     }
 
     render();
-    return { setMessage, setMode, destroy, get mode() { return mode; } };
+    // Burp-style search bar under the message; it re-highlights whenever
+    // the message or the Pretty/Raw/Hex mode changes.
+    const search = window.MsgSearch ? window.MsgSearch.attach(body, { barHost: containerEl }) : null;
+    return { setMessage, setMode, destroy, search, get mode() { return mode; } };
   }
 
   // ----------------------------- export ---------------------------

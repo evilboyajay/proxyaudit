@@ -108,7 +108,10 @@ function statusClass(s) {
 
 function headerLines(headers) {
   if (!headers) return '';
-  return Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join('\n');
+  // Repeated headers (Set-Cookie) arrive as arrays: one line each, like Burp.
+  return Object.entries(headers)
+    .flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).map((x) => `${k}: ${x}`))
+    .join('\n');
 }
 function buildRequestRaw(flow) {
   const r = flow.request || {};
@@ -227,6 +230,22 @@ const flowBody = $('#flowBody');
 // HTTP message viewers (Pretty / Raw / Hex) for the Proxy detail pane.
 const reqViewer = MsgView.mount($('#reqView'));
 const resViewer = MsgView.mount($('#resView'));
+// Burp-style message editors everywhere a message is shown or edited:
+// numbered + coloured viewers with search (MsgView), and the same for the
+// editable request textareas (CodeEditor). Other raw panes get search only.
+const repViewer = MsgView.mount($('#repResponse'));
+const intrReqViewer = MsgView.mount($('#intrReqRaw'));
+const intrResViewer = MsgView.mount($('#intrResRaw'));
+repViewer.setMessage('No response yet.');
+intrReqViewer.setMessage('Select a result row to inspect.');
+for (const id of ['interceptEditor', 'repRequest', 'intrTemplate', 'seq-request']) {
+  const el = document.getElementById(id);
+  if (el) CodeEditor.attach(el);
+}
+for (const id of ['wsFrames', 'collabRaw']) {
+  const el = document.getElementById(id);
+  if (el) MsgSearch.attach(el);
+}
 let flowFilter = '';
 $('#flowFilter').addEventListener('input', (e) => {
   flowFilter = e.target.value.toLowerCase();
@@ -698,7 +717,7 @@ function loadRepeaterTab() {
   $('#repMethod').value = t.method;
   $('#repUrl').value = t.url;
   $('#repRequest').value = t.request;
-  $('#repResponse').textContent = t.response;
+  repViewer.setMessage(t.response);
   $('#repMeta').textContent = t.meta;
 }
 function saveRepeaterTab() {
@@ -729,7 +748,7 @@ $('#repSendBtn').addEventListener('click', async () => {
     return;
   }
   const { headers, body } = parseHeadersBody(t.request);
-  $('#repResponse').textContent = 'Sending…';
+  repViewer.setMessage('Sending…');
   $('#repMeta').textContent = '';
   const res = await api.sendRequest({
     method: t.method,
@@ -748,7 +767,7 @@ $('#repSendBtn').addEventListener('click', async () => {
       (res.body || '');
     t.meta = `${res.status} · ${fmtLen(res.length)} · ${res.durationMs} ms`;
   }
-  $('#repResponse').textContent = t.response;
+  repViewer.setMessage(t.response);
   $('#repMeta').textContent = t.meta;
 });
 
@@ -2028,15 +2047,15 @@ $('#intrBody').addEventListener('click', async (e) => {
   const res = full.response || {};
   const reqRaw =
     `${req.method} ${req.url}\n` +
-    Object.entries(req.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n') +
+    headerLines(req.headers || {}) +
     '\n\n' + (req.body || '');
   const resRaw = res.error
     ? 'Error: ' + res.error
     : `HTTP ${res.status} ${res.statusMessage || ''}\n` +
-      Object.entries(res.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n') +
+      headerLines(res.headers || {}) +
       '\n\n' + (res.body || '');
-  $('#intrReqRaw').textContent = reqRaw;
-  $('#intrResRaw').textContent = resRaw;
+  intrReqViewer.setMessage(reqRaw);
+  intrResViewer.setMessage(resRaw);
   $('#intrDetailMeta').textContent = res.error
     ? ''
     : `${res.status} · ${fmtLen(res.length)} · ${res.durationMs} ms`;
@@ -2058,8 +2077,8 @@ $('#intrStartBtn').addEventListener('click', async () => {
   intrRows.clear();
   intrSelected = null;
   renderIntrTable();
-  $('#intrReqRaw').textContent = 'Running…';
-  $('#intrResRaw').textContent = '';
+  intrReqViewer.setMessage('Running…');
+  intrResViewer.setMessage('');
   const res = await api.intruderStart({
     origin,
     template,
@@ -2699,6 +2718,7 @@ const ACTIONS = {
   'html-encode': { label: 'HTML encode selection', transform: 'htmlenc' },
   'html-decode': { label: 'HTML decode selection', transform: 'htmldec' },
   'smart-decode': { label: 'Smart-decode selection', transform: 'smart' },
+  'find': { label: 'Search in message', run: () => MsgSearch.focusActive() },
   'help': { label: 'Show shortcuts list', run: () => toggleShortcutHelp() },
 };
 const DEFAULT_KEYMAP = {
@@ -2715,6 +2735,7 @@ const DEFAULT_KEYMAP = {
   'html-encode': 'mod+h',
   'html-decode': 'mod+shift+h',
   'smart-decode': 'mod+shift+d',
+  'find': 'mod+f',
   'help': 'mod+/',
 };
 let keymap = { ...DEFAULT_KEYMAP };
