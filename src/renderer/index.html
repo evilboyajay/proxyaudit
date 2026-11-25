@@ -180,7 +180,7 @@
             <div id="repeaterTabs" class="tabs"></div>
             <button class="btn sm" id="newRepeaterTab">+ New</button>
           </div>
-          <div class="toolbar">
+          <div class="toolbar" id="repHttpBar">
             <select id="repMethod" class="input" style="width:100px">
               <option>GET</option><option>POST</option><option>PUT</option>
               <option>PATCH</option><option>DELETE</option><option>HEAD</option>
@@ -189,7 +189,7 @@
             <input id="repUrl" class="input grow" placeholder="https://target/path" />
             <button class="btn primary" id="repSendBtn">Send</button>
           </div>
-          <div class="split">
+          <div class="split" id="repHttpPane">
             <div class="col">
               <label class="field-label">Request headers &amp; body</label>
               <textarea id="repRequest" class="code-area" spellcheck="false"
@@ -200,6 +200,35 @@
                 Response <span id="repMeta" class="muted"></span>
               </label>
               <div id="repResponse" class="mv-wrap"></div>
+            </div>
+          </div>
+          <!-- WebSocket Repeater tab (Burp-style): own connection, handshake, send + history -->
+          <div class="toolbar hidden" id="repWsBar">
+            <span class="pill off" id="wsrState">Disconnected</span>
+            <input id="wsrUrl" class="input grow" placeholder="wss://target/socket" />
+            <button class="btn" id="wsrConnectBtn">Connect</button>
+            <button class="btn primary" id="wsrSendBtn" title="Send message to server (⌘↵)">Send</button>
+          </div>
+          <div class="split hidden" id="repWsPane">
+            <div class="col">
+              <label class="field-label">Message to server
+                <label class="muted wsr-bin"><input type="checkbox" id="wsrBinary" /> binary (base64)</label>
+              </label>
+              <textarea id="wsrMessage" class="code-area" spellcheck="false"
+                placeholder='{"type":"ping"}'></textarea>
+              <label class="field-label">Handshake headers <span class="muted">— sent when you (re)connect</span></label>
+              <div class="wsr-hs">
+                <textarea id="wsrHandshake" class="code-area" spellcheck="false"
+                  placeholder="Origin: https://target&#10;Cookie: session=…"></textarea>
+              </div>
+            </div>
+            <div class="col">
+              <label class="field-label">
+                History <span id="wsrCount" class="muted"></span>
+                <span class="muted">— double-click a message to edit &amp; resend</span>
+                <button class="btn sm" id="wsrClearBtn">Clear</button>
+              </label>
+              <div id="wsrFrames" class="ws-frames wsr-frames"></div>
             </div>
           </div>
         </section>
@@ -538,6 +567,9 @@
             <div class="detail">
               <div class="detail-toolbar">
                 <span id="wsTitle" class="muted">Select a connection.</span>
+                <div class="detail-actions">
+                  <button class="btn sm" id="wsToRepeaterBtn" disabled title="Open this connection in Repeater with the selected message">→ Repeater</button>
+                </div>
               </div>
               <div id="wsFrames" class="ws-frames"></div>
             </div>

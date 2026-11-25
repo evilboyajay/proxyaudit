@@ -71,6 +71,9 @@ const api = {
   clearFlows: rec('clearFlows', true),
   deleteFlows: rec('deleteFlows', 1),
   listWs: rec('listWs', []),
+  wsrConnect: rec('wsrConnect', { ok: true }),
+  wsrSend: rec('wsrSend', { ok: true }),
+  wsrClose: rec('wsrClose', { ok: true }),
   getWs: rec('getWs', { id: 'w1', url: 'wss://ex.com/s', host: 'ex.com', closed: false,
     messages: [{ ts: Date.now(), direction: 'outgoing', binary: false, length: 5, data: 'hello' }] }),
   sendRequest: rec('sendRequest', { status: 200, statusMessage: 'OK', headers: { 'content-type': 'application/json' }, body: '{"ok":true}', length: 11, durationMs: 42, mime: 'application/json' }),
@@ -745,6 +748,40 @@ function goto(view) {
     goto('proxy');
     check('search: proxy message viewer has a search bar', !!$('#reqView').querySelector('.ms-bar'), 'no bar');
     check('search: intruder result panes use message viewers', !!$('#intrResRaw').querySelector('.ms-bar') && $('#intrResRaw').classList.contains('hidden'), 'missing');
+  }
+
+  // 25) WebSocket -> Repeater (Burp-style WS Repeater tab)
+  {
+    fire('evt:ws-open', { id: 'w1', url: 'wss://ex.com/s', host: 'ex.com' });
+    goto('proxy');
+    await wait(5);
+    const row = window.document.querySelector('#wsBody tr');
+    click(row);
+    await wait(10);
+    const fr = window.document.querySelector('#wsFrames .ws-frame');
+    if (fr) click(fr);
+    click($('#wsToRepeaterBtn'));
+    await wait(10);
+    check('ws->repeater: opens a WS tab', !$('#repWsPane').classList.contains('hidden') && $('#repHttpPane').classList.contains('hidden'), 'WS pane not shown');
+    check('ws->repeater: URL + handshake carried over', $('#wsrUrl').value === 'wss://ex.com/s', $('#wsrUrl').value);
+    click($('#wsrConnectBtn'));
+    await wait(10);
+    const cc = calls.wsrConnect.at(-1);
+    check('ws repeater: connect uses tab URL', cc && cc[1] === 'wss://ex.com/s', JSON.stringify(cc));
+    const connId = cc[0];
+    fire('evt:wsr-state', { id: connId, state: 'open', detail: '' });
+    await wait(5);
+    check('ws repeater: shows Connected', $('#wsrState').textContent === 'Connected' && !$('#wsrSendBtn').disabled, $('#wsrState').textContent);
+    $('#wsrMessage').value = '{"a":1}';
+    click($('#wsrSendBtn'));
+    await wait(10);
+    check('ws repeater: send passes message', calls.wsrSend.at(-1)[1] === '{"a":1}', JSON.stringify(calls.wsrSend.at(-1)));
+    fire('evt:wsr-frame', { id: connId, frame: { ts: Date.now(), direction: 'incoming', binary: false, length: 5, data: 'reply' } });
+    await wait(5);
+    check('ws repeater: incoming frames appear in history', /reply/.test($('#wsrFrames').textContent), $('#wsrFrames').textContent);
+    click(window.document.querySelector('#repeaterTabs .tab'));
+    await wait(5);
+    check('ws repeater: switching to an HTTP tab restores HTTP pane', !$('#repHttpPane').classList.contains('hidden') && $('#repWsPane').classList.contains('hidden'), 'panes wrong');
   }
 
   // ---- report ----

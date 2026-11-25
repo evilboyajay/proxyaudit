@@ -480,18 +480,33 @@ class ProxyEngine extends EventEmitter {
     this._wsSeq += 1;
     const connId = `w${Date.now().toString(36)}-${this._wsSeq}`;
     ctx.__wsConnId = connId;
-    // The request object can be missing/partial on some upgrades — guard it.
+    // http-mitm-proxy keeps the upgrade's resolved URL and the client's
+    // handshake headers (minus Sec-WebSocket-*) on proxyToServerWebSocketOptions;
+    // older shapes exposed the raw request instead — fall back to that.
+    const opts = ctx.proxyToServerWebSocketOptions || {};
     const creq =
       ctx.clientToProxyWebSocketRequest || ctx.clientToProxyRequest || {};
-    const headers = creq.headers || {};
-    const host = headers.host || '';
+    const headers = { ...(opts.headers || creq.headers || {}) };
+    // The negotiated subprotocol is part of the handshake the app needs.
+    const proto = ctx.clientToProxyWebSocket && ctx.clientToProxyWebSocket.protocol;
+    if (proto && !Object.keys(headers).some((k) => k.toLowerCase() === 'sec-websocket-protocol')) {
+      headers['Sec-WebSocket-Protocol'] = proto;
+    }
     const scheme = ctx.isSSL ? 'wss' : 'ws';
+    let url = opts.url || '';
+    if (!url) url = `${scheme}://${headers.host || ''}${creq.url || ''}`;
+    let host = headers.host || '';
+    try {
+      host = new URL(url).host || host;
+    } catch (_) {
+      /* keep */
+    }
     this.emit('ws-open', {
       id: connId,
       ts: Date.now(),
-      url: `${scheme}://${host}${creq.url || ''}`,
+      url,
       host,
-      headers: { ...headers },
+      headers,
     });
   }
 

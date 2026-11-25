@@ -16,6 +16,12 @@ const os = require('os');
 const { ProxyEngine } = require('./proxy/engine');
 const { Store } = require('./store');
 const { sendRequest } = require('./proxy/repeater');
+const { WsRepeater } = require('./wsrepeater');
+
+// Burp-style WebSocket Repeater connections (one per Repeater WS tab).
+const wsRepeater = new WsRepeater();
+wsRepeater.on('state', (s) => send('evt:wsr-state', s));
+wsRepeater.on('frame', (f) => send('evt:wsr-frame', f));
 const auditor = require('./audit/auditor');
 const browser = require('./browser');
 const { Intruder } = require('./intruder');
@@ -371,6 +377,9 @@ function registerIpc() {
   ipcMain.handle('ws:get', async (_e, id) => store.getWs(id));
 
   ipcMain.handle('repeater:send', async (_e, spec) => sendRequest(spec));
+  ipcMain.handle('wsr:connect', async (_e, { id, url, headers }) => wsRepeater.connect(id, { url, headers }));
+  ipcMain.handle('wsr:send', async (_e, { id, data, binary }) => wsRepeater.send(id, data, { binary }));
+  ipcMain.handle('wsr:close', async (_e, id) => wsRepeater.close(id));
 
   // ----------------------------- Intruder -----------------------------
   ipcMain.handle('intruder:count', async (_e, { attackType, template, payloadSets }) => {
@@ -715,5 +724,6 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (engine) engine.stop();
   if (collaborator) collaborator.stop();
+  wsRepeater.closeAll();
   if (process.platform !== 'darwin') app.quit();
 });

@@ -238,11 +238,11 @@ const intrReqViewer = MsgView.mount($('#intrReqRaw'));
 const intrResViewer = MsgView.mount($('#intrResRaw'));
 repViewer.setMessage('No response yet.');
 intrReqViewer.setMessage('Select a result row to inspect.');
-for (const id of ['interceptEditor', 'repRequest', 'intrTemplate', 'seq-request']) {
+for (const id of ['interceptEditor', 'repRequest', 'intrTemplate', 'seq-request', 'wsrMessage', 'wsrHandshake']) {
   const el = document.getElementById(id);
   if (el) CodeEditor.attach(el);
 }
-for (const id of ['wsFrames', 'collabRaw']) {
+for (const id of ['wsFrames', 'wsrFrames', 'collabRaw']) {
   const el = document.getElementById(id);
   if (el) MsgSearch.attach(el);
 }
@@ -679,6 +679,7 @@ function newRepeaterTab(preset) {
   repeaterSeq += 1;
   const tab = {
     id: repeaterSeq,
+    kind: preset?.kind || 'http',
     name: preset?.name || `Req ${repeaterSeq}`,
     method: preset?.method || 'GET',
     url: preset?.url || '',
@@ -686,6 +687,20 @@ function newRepeaterTab(preset) {
     response: 'No response yet.',
     meta: '',
   };
+  if (tab.kind === 'ws') {
+    // Burp-style WebSocket Repeater tab: its own live connection.
+    Object.assign(tab, {
+      name: preset?.name || `WS ${repeaterSeq}`,
+      wsUrl: preset?.wsUrl || '',
+      handshake: preset?.handshake || '',
+      message: preset?.message || '',
+      binary: !!preset?.binary,
+      frames: [],
+      state: 'closed',
+      stateDetail: '',
+      selFrame: -1,
+    });
+  }
   repeaterTabs.push(tab);
   activeRepeaterTab = repeaterTabs.length - 1;
   renderRepeaterTabs();
@@ -695,7 +710,7 @@ function renderRepeaterTabs() {
   $('#repeaterTabs').innerHTML = repeaterTabs
     .map(
       (t, i) =>
-        `<div class="tab ${i === activeRepeaterTab ? 'active' : ''}" data-i="${i}">${esc(t.name)}</div>`
+        `<div class="tab ${t.kind === 'ws' ? 'ws ' : ''}${i === activeRepeaterTab ? 'active' : ''}" data-i="${i}" title="${esc(t.kind === 'ws' ? t.wsUrl : t.url)}">${esc(t.name)}</div>`
     )
     .join('');
 }
@@ -714,6 +729,20 @@ $('#newRepeaterTab').addEventListener('click', () => {
 function loadRepeaterTab() {
   const t = repeaterTabs[activeRepeaterTab];
   if (!t) return;
+  const ws = t.kind === 'ws';
+  $('#repHttpBar').classList.toggle('hidden', ws);
+  $('#repHttpPane').classList.toggle('hidden', ws);
+  $('#repWsBar').classList.toggle('hidden', !ws);
+  $('#repWsPane').classList.toggle('hidden', !ws);
+  if (ws) {
+    $('#wsrUrl').value = t.wsUrl;
+    $('#wsrHandshake').value = t.handshake;
+    $('#wsrMessage').value = t.message;
+    $('#wsrBinary').checked = t.binary;
+    renderWsrState(t);
+    renderWsrFrames(t);
+    return;
+  }
   $('#repMethod').value = t.method;
   $('#repUrl').value = t.url;
   $('#repRequest').value = t.request;
@@ -723,6 +752,13 @@ function loadRepeaterTab() {
 function saveRepeaterTab() {
   const t = repeaterTabs[activeRepeaterTab];
   if (!t) return;
+  if (t.kind === 'ws') {
+    t.wsUrl = $('#wsrUrl').value.trim();
+    t.handshake = $('#wsrHandshake').value;
+    t.message = $('#wsrMessage').value;
+    t.binary = $('#wsrBinary').checked;
+    return;
+  }
   t.method = $('#repMethod').value;
   t.url = $('#repUrl').value;
   t.request = $('#repRequest').value;
@@ -771,6 +807,164 @@ $('#repSendBtn').addEventListener('click', async () => {
   $('#repMeta').textContent = t.meta;
 });
 
+// ======================= websocket repeater =======================
+// A Repeater tab of kind 'ws' owns one live connection in the main process,
+// keyed 'rt<tab id>'. Connect uses the editable handshake headers; frames in
+// both directions stream back as evt:wsr-frame.
+const WS_AUTO_HEADERS = new Set([
+  'host', 'connection', 'upgrade', 'content-length', 'sec-websocket-key',
+  'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-accept',
+  'proxy-connection', 'keep-alive',
+]);
+const wsrConnId = (t) => 'rt' + t.id;
+const wsrTabByConn = (id) => repeaterTabs.find((t) => t.kind === 'ws' && wsrConnId(t) === id);
+const activeWsTab = () => {
+  const t = repeaterTabs[activeRepeaterTab];
+  return t && t.kind === 'ws' ? t : null;
+};
+function wsHandshakeText(headers) {
+  return Object.entries(headers || {})
+    .filter(([k]) => !WS_AUTO_HEADERS.has(k.toLowerCase()))
+    .map(([k, v]) => `${k}: ${v}`)
+    .join('\n');
+}
+function renderWsrState(t) {
+  const el = $('#wsrState');
+  const label = { open: 'Connected', connecting: 'Connecting…', error: 'Error', closed: 'Disconnected' }[t.state] || t.state;
+  el.textContent = label;
+  el.className = 'pill ' + (t.state === 'closed' ? 'off' : t.state);
+  el.title = t.stateDetail || '';
+  $('#wsrConnectBtn').textContent = t.state === 'open' || t.state === 'connecting' ? 'Disconnect' : (t.frames.length ? 'Reconnect' : 'Connect');
+  $('#wsrSendBtn').disabled = t.state !== 'open';
+}
+function renderWsrFrames(t) {
+  $('#wsrCount').textContent = t.frames.filter((f) => !f.sys).length ? `(${t.frames.filter((f) => !f.sys).length})` : '';
+  $('#wsrFrames').innerHTML = t.frames
+    .map((m, i) => {
+      if (m.sys) return `<div class="ws-frame sys" data-i="${i}">— ${esc(m.text)}</div>`;
+      const out = m.direction === 'outgoing';
+      const data = m.binary ? `[binary ${fmtLen(m.length)}] ${m.data}` : m.data;
+      return (
+        `<div class="ws-frame ${out ? 'out' : 'in'}${i === t.selFrame ? ' selected' : ''}" data-i="${i}" title="${out ? 'To server' : 'To client'}">` +
+        `<span class="arrow">${out ? '▲' : '▼'}</span>` +
+        `<span class="wtime">${new Date(m.ts).toLocaleTimeString()}</span>` +
+        `<span class="wlen">${fmtLen(m.length)}</span>` +
+        `<span class="wdata">${esc(data)}</span></div>`
+      );
+    })
+    .join('');
+  const box = $('#wsrFrames');
+  box.scrollTop = box.scrollHeight;
+}
+function wsrSys(t, text) {
+  t.frames.push({ sys: true, text, ts: Date.now() });
+}
+async function wsrConnect(t) {
+  saveRepeaterTab();
+  if (!t.wsUrl) return toast('Enter a ws:// or wss:// URL');
+  const { headers } = parseHeadersBody(t.handshake || '');
+  t.state = 'connecting';
+  renderWsrState(t);
+  const res = await api.wsrConnect(wsrConnId(t), t.wsUrl, headers);
+  if (!res.ok) {
+    t.state = 'error';
+    t.stateDetail = res.error;
+    wsrSys(t, res.error);
+  }
+  if (activeWsTab() === t) {
+    renderWsrState(t);
+    renderWsrFrames(t);
+  }
+}
+function sendWsToRepeater(conn, frame) {
+  saveRepeaterTab();
+  let host = conn.host || '';
+  try {
+    host = new URL(conn.url).host;
+  } catch (_) {
+    /* keep */
+  }
+  const isText = frame && !frame.binary;
+  newRepeaterTab({
+    kind: 'ws',
+    name: 'WS ' + host,
+    wsUrl: conn.url,
+    handshake: wsHandshakeText(conn.headers),
+    message: frame ? frame.data : '',
+    binary: !!(frame && !isText),
+  });
+  showView('repeater');
+  toast('Sent to Repeater — Connect to open the WebSocket');
+}
+$('#wsrConnectBtn').addEventListener('click', () => {
+  const t = activeWsTab();
+  if (!t) return;
+  if (t.state === 'open' || t.state === 'connecting') {
+    api.wsrClose(wsrConnId(t));
+    return;
+  }
+  wsrConnect(t);
+});
+$('#wsrSendBtn').addEventListener('click', async () => {
+  const t = activeWsTab();
+  if (!t) return;
+  saveRepeaterTab();
+  if (t.state !== 'open') return toast('Not connected — click Connect first');
+  const res = await api.wsrSend(wsrConnId(t), t.message, t.binary);
+  if (!res.ok) toast('⚠ ' + res.error);
+});
+$('#wsrClearBtn').addEventListener('click', () => {
+  const t = activeWsTab();
+  if (!t) return;
+  t.frames = [];
+  t.selFrame = -1;
+  renderWsrFrames(t);
+  renderWsrState(t);
+});
+$('#wsrFrames').addEventListener('click', (e) => {
+  const t = activeWsTab();
+  const row = e.target.closest('.ws-frame');
+  if (!t || !row || row.classList.contains('sys')) return;
+  t.selFrame = Number(row.dataset.i);
+  $$('#wsrFrames .ws-frame').forEach((x) => x.classList.toggle('selected', x === row));
+});
+// Burp: pick a message from history, edit it, resend.
+$('#wsrFrames').addEventListener('dblclick', (e) => {
+  const t = activeWsTab();
+  const row = e.target.closest('.ws-frame');
+  if (!t || !row || row.classList.contains('sys')) return;
+  const f = t.frames[Number(row.dataset.i)];
+  $('#wsrMessage').value = f.data;
+  $('#wsrBinary').checked = !!f.binary;
+  saveRepeaterTab();
+  $('#wsrMessage').focus();
+});
+['wsrUrl', 'wsrHandshake', 'wsrMessage', 'wsrBinary'].forEach((id) =>
+  document.getElementById(id).addEventListener('change', saveRepeaterTab)
+);
+api.on('evt:wsr-state', ({ id, state, detail }) => {
+  const t = wsrTabByConn(id);
+  if (!t) return;
+  const was = t.state;
+  // A failed connect is followed by a 'closed' event: keep showing the error.
+  if (state === 'closed' && was === 'error') return;
+  t.state = state;
+  t.stateDetail = detail || '';
+  if (state === 'open') wsrSys(t, 'Connected' + (detail ? ` (${detail})` : ''));
+  else if (state === 'closed' && was !== 'closed' && was !== 'error') wsrSys(t, 'Disconnected — ' + (detail || ''));
+  if (activeWsTab() === t) {
+    renderWsrState(t);
+    renderWsrFrames(t);
+  }
+});
+api.on('evt:wsr-frame', ({ id, frame }) => {
+  const t = wsrTabByConn(id);
+  if (!t) return;
+  t.frames.push(frame);
+  if (t.frames.length > 5000) t.frames.splice(0, t.frames.length - 5000);
+  if (activeWsTab() === t) renderWsrFrames(t);
+});
+
 // =========================== websockets ===========================
 const wsConns = new Map();
 let selectedWs = null;
@@ -784,24 +978,61 @@ function renderWsList() {
     )
     .join('');
 }
+let wsSelConn = null; // full connection record shown in the detail pane
+let wsSelFrame = -1;
 $('#wsBody').addEventListener('click', async (e) => {
   const tr = e.target.closest('tr');
   if (!tr) return;
   selectedWs = tr.dataset.id;
+  wsSelFrame = -1;
   renderWsList();
   const conn = await api.getWs(selectedWs);
   renderWsFrames(conn);
 });
+$('#wsBody').addEventListener('contextmenu', async (e) => {
+  const tr = e.target.closest('tr');
+  if (!tr) return;
+  e.preventDefault();
+  const conn = await api.getWs(tr.dataset.id);
+  if (!conn) return;
+  ContextMenu.show(e.clientX, e.clientY, [
+    { label: 'Send to Repeater', shortcut: comboLabel(keymap['send-repeater']), action: () => sendWsToRepeater(conn, null) },
+    { label: 'Copy URL', action: () => navigator.clipboard.writeText(conn.url) },
+  ]);
+});
+$('#wsFrames').addEventListener('click', (e) => {
+  const row = e.target.closest('.ws-frame');
+  if (!row) return;
+  wsSelFrame = Number(row.dataset.i);
+  $$('#wsFrames .ws-frame').forEach((x) => x.classList.toggle('selected', x === row));
+});
+$('#wsFrames').addEventListener('contextmenu', (e) => {
+  const row = e.target.closest('.ws-frame');
+  if (!row || !wsSelConn) return;
+  e.preventDefault();
+  wsSelFrame = Number(row.dataset.i);
+  $$('#wsFrames .ws-frame').forEach((x) => x.classList.toggle('selected', x === row));
+  const frame = wsSelConn.messages[wsSelFrame];
+  ContextMenu.show(e.clientX, e.clientY, [
+    { label: 'Send to Repeater', shortcut: comboLabel(keymap['send-repeater']), action: () => sendWsToRepeater(wsSelConn, frame) },
+    { label: 'Copy message', action: () => navigator.clipboard.writeText(frame.data) },
+  ]);
+});
+$('#wsToRepeaterBtn').addEventListener('click', () => {
+  if (wsSelConn) sendWsToRepeater(wsSelConn, wsSelConn.messages[wsSelFrame] || null);
+});
 function renderWsFrames(conn) {
   if (!conn) return;
+  wsSelConn = conn;
+  $('#wsToRepeaterBtn').disabled = false;
   $('#wsTitle').textContent = conn.url;
   $('#wsFrames').innerHTML = conn.messages
-    .map((m) => {
+    .map((m, i) => {
       const out = m.direction === 'outgoing';
       const time = new Date(m.ts).toLocaleTimeString();
       const data = m.binary ? `[binary ${fmtLen(m.length)}]` : m.data;
       return (
-        `<div class="ws-frame ${out ? 'out' : 'in'}">` +
+        `<div class="ws-frame ${out ? 'out' : 'in'}${i === wsSelFrame ? ' selected' : ''}" data-i="${i}">` +
         `<span class="arrow">${out ? '▲' : '▼'}</span>` +
         `<span class="wtime">${time}</span>` +
         `<span class="wdata">${esc(data)}</span></div>`
@@ -2678,7 +2909,7 @@ function activeViewName() {
 }
 function runActiveTab() {
   const view = activeViewName();
-  if (view === 'repeater') $('#repSendBtn').click();
+  if (view === 'repeater') (activeWsTab() ? $('#wsrSendBtn') : $('#repSendBtn')).click();
   else if (view === 'intruder') $('#intrStartBtn').click();
   else if (view === 'sequencer') document.getElementById('seq-start').click();
   else if (view === 'discovery') $('#discStartBtn').click();
@@ -2705,7 +2936,10 @@ async function transformSelection(transformId) {
 
 // action id -> { label, run? , transform? }
 const ACTIONS = {
-  'send-repeater': { label: 'Send selected request to Repeater', run: () => currentFlow ? sendFlowToRepeater(currentFlow) : toast('Select a request first') },
+  'send-repeater': { label: 'Send selected request to Repeater', run: () => {
+    if (activeViewName() === 'websockets') return wsSelConn ? sendWsToRepeater(wsSelConn, wsSelConn.messages[wsSelFrame] || null) : toast('Select a WebSocket connection first');
+    return currentFlow ? sendFlowToRepeater(currentFlow) : toast('Select a request first');
+  } },
   'send-intruder': { label: 'Send selected request to Intruder', run: () => currentFlow ? sendFlowToIntruder(currentFlow) : toast('Select a request first') },
   'goto-repeater': { label: 'Go to Repeater tab', run: () => showView('repeater') },
   'goto-intruder': { label: 'Go to Intruder tab', run: () => showView('intruder') },

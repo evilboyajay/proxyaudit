@@ -10,6 +10,8 @@ const EVENTS = [
   'evt:ws-open',
   'evt:ws-message',
   'evt:ws-close',
+  'evt:wsr-state',
+  'evt:wsr-frame',
   'evt:status',
   'evt:error',
   'evt:audit-delta',
@@ -65,6 +67,10 @@ contextBridge.exposeInMainWorld('api', {
 
   // Repeater
   sendRequest: (spec) => ipcRenderer.invoke('repeater:send', spec),
+  // WebSocket Repeater
+  wsrConnect: (id, url, headers) => ipcRenderer.invoke('wsr:connect', { id, url, headers }),
+  wsrSend: (id, data, binary) => ipcRenderer.invoke('wsr:send', { id, data, binary }),
+  wsrClose: (id) => ipcRenderer.invoke('wsr:close', id),
 
   // Intruder
   intruderCount: (spec) => ipcRenderer.invoke('intruder:count', spec),

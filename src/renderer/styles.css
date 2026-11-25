@@ -719,7 +719,7 @@ thead th.sorted { color: var(--accent); }
 
 /* ---------- MsgSearch (Burp-style message editor search bar) ---------- */
 .ms-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.ms-wrap > .raw, .ms-wrap > div { flex: 1; min-height: 0; }
+.ms-wrap > :not(.ms-bar) { flex: 1; min-height: 0; }
 mark.ms-hit { background: #fde68a; color: inherit; border-radius: 2px; }
 mark.ms-hit.ms-cur { background: #f59e0b; box-shadow: 0 0 0 1px #d97706; }
 .ms-bar {
@@ -751,3 +751,15 @@ mark.ms-hit.ms-cur { background: #f59e0b; box-shadow: 0 0 0 1px #d97706; }
 /* Programming ligatures (JetBrains Mono turns <!-- and -> into arrows)
    misrepresent raw HTTP; show every character as typed. */
 .raw, .code-area, .mv-body, .ce-back, .ce-ta, .ms-input { font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
+
+/* ---------- WebSocket Repeater ---------- */
+.wsr-hs { flex: 0 0 150px; display: flex; min-height: 0; }
+.wsr-bin { margin-left: 10px; font-weight: 400; display: inline-flex; align-items: center; gap: 4px; }
+.pill.open { color: var(--green); border-color: #bfe3cd; background: #eaf7f0; }
+.pill.connecting { color: var(--yellow); border-color: #f0d9a8; background: #fdf6e7; }
+.pill.error { color: var(--red); border-color: #f1c4c4; background: #fdf0f0; }
+.ws-frame { cursor: default; border: 1px solid transparent; }
+.ws-frame.selected { border-color: var(--accent); background: var(--accent-soft); }
+.wsr-frames .ws-frame { cursor: pointer; }
+.ws-frame .wlen { color: var(--muted); min-width: 52px; text-align: right; }
+.ws-frame.sys { background: none; color: var(--muted); font-style: italic; }
