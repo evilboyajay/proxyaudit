@@ -1159,7 +1159,7 @@ function chatAppend(cls, html) {
   if (actStatusEl && actStatusEl.parentNode && !cls.includes('status')) {
     $('#chatMessages').appendChild(actStatusEl);
   }
-  $('#chatMessages').scrollTop = $('#chatMessages').scrollHeight;
+  scrollMessages();
   return el;
 }
 
@@ -1195,7 +1195,38 @@ function makeRun(convId) {
   };
 }
 function isActive(convId) { return convId != null && convId === chatActiveId; }
-function scrollMessages() { const b = $('#chatMessages'); b.scrollTop = b.scrollHeight; }
+// Auto-follow the bottom only while the user is already there. Scrolling up
+// to read earlier output detaches; scrolling back to the bottom re-attaches.
+let chatStick = true;
+function scrollMessages(force) {
+  const b = $('#chatMessages');
+  if (force) chatStick = true;
+  if (chatStick) b.scrollTop = b.scrollHeight;
+}
+$('#chatMessages').addEventListener('scroll', () => {
+  const b = $('#chatMessages');
+  chatStick = b.scrollHeight - b.scrollTop - b.clientHeight < 40;
+}, { passive: true });
+// Streaming text/thinking arrives token by token; re-rendering markdown for
+// each one is what made scrolling janky. Coalesce to one render per frame.
+let chatRenderRaf = 0, chatRenderRun = null;
+function scheduleStreamRender(run) {
+  chatRenderRun = run;
+  if (chatRenderRaf) return;
+  chatRenderRaf = requestAnimationFrame(flushStreamRender);
+}
+function flushStreamRender() {
+  chatRenderRaf = 0;
+  const run = chatRenderRun; chatRenderRun = null;
+  if (!run || !isActive(run.convId)) return;
+  if (actStreamEl && run.streamBuf) actStreamEl.innerHTML = chatMdLite(run.streamBuf);
+  if (actThinkEl && run.thinkBuf) actThinkEl.textContent = '💭 ' + run.thinkBuf.slice(-4000);
+  scrollMessages();
+}
+function cancelStreamRender() {
+  if (chatRenderRaf) cancelAnimationFrame(chatRenderRaf);
+  chatRenderRaf = 0; chatRenderRun = null;
+}
 
 function fmtElapsed(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -1230,15 +1261,18 @@ function finishActiveStatus(run, stopped) {
   }
 }
 function closeStreamActive() {
+  if (chatRenderRaf) flushStreamRender();
   if (actStreamEl && actStreamEl.textContent.trim() === '') actStreamEl.remove();
   actStreamEl = null;
 }
 function closeThinkActive(run) {
+  if (chatRenderRaf && actThinkEl) { cancelAnimationFrame(chatRenderRaf); flushStreamRender(); }
   actThinkEl = null;
   if (run) run.thinkBuf = '';
 }
 // Persist the current assistant text segment to the run's conversation.
 function flushSegment(run) {
+  if (chatRenderRaf && isActive(run.convId)) { cancelAnimationFrame(chatRenderRaf); flushStreamRender(); }
   if (run.streamBuf && run.streamBuf.trim()) {
     api.chatAppend(run.convId, { role: 'assistant', content: run.streamBuf });
   }
@@ -1358,11 +1392,13 @@ function chatRenderStored(messages) {
       chatAppend('subagent ' + (sa.status || 'completed'), subagentCardHtml(sa));
     }
   }
+  scrollMessages(true);
 }
 // Tear down the active view's live DOM refs (the message box is about to be
 // rebuilt). Does NOT touch any run — background turns keep streaming.
 function detachActiveView() {
   if (actTimer) { clearInterval(actTimer); actTimer = null; }
+  cancelStreamRender();
   actStatusEl = null; actStreamEl = null; actThinkEl = null;
 }
 // Re-create live elements for a conversation that is still running, from its
@@ -1384,7 +1420,7 @@ function reattachRun(run) {
     }
   }
   startActiveStatus(run);
-  scrollMessages();
+  scrollMessages(true);
 }
 async function chatOpen(id) {
   // Switching conversations NEVER stops a run — it keeps going in the
@@ -1564,6 +1600,7 @@ async function sendChat(explicitMsg) {
   const convId = await chatEnsureActive();
   await api.chatAppend(convId, { role: 'user', content: msg });
   chatAppend('user', esc(msg).replace(/\n/g, '<br>'));
+  scrollMessages(true);
   const run = makeRun(convId);
   if (nextGoal) { run.goal = nextGoal; run.goalIter = 0; nextGoal = null; }
   runs.set(convId, run);
@@ -1728,16 +1765,14 @@ api.on('evt:assistant-event', ({ turnId, event }) => {
     if (active) {
       closeThinkActive(run);
       if (!actStreamEl) actStreamEl = chatAppend('assistant', '');
-      actStreamEl.innerHTML = chatMdLite(run.streamBuf);
-      scrollMessages();
+      scheduleStreamRender(run);
     }
   } else if (event.type === 'thinking') {
     if (!event.text) return;
     run.thinkBuf += event.text;
     if (active) {
       if (!actThinkEl) actThinkEl = chatAppend('thinking muted', '');
-      actThinkEl.textContent = '💭 ' + run.thinkBuf.slice(-4000);
-      scrollMessages();
+      scheduleStreamRender(run);
     }
   } else if (event.type === 'subagent') {
     handleSubagentEvent(run, convId, active, event);
